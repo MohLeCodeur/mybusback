@@ -5,6 +5,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const morgan = require('morgan');
+const paymentRouter = require('./routes/payments');
 
 // Initialisation de l'application Express
 const app = express();
@@ -78,7 +79,7 @@ const trajetRouter = require('./routes/trajets');
 
 app.use('/api/reservations', reservationRouter);
 app.use('/api/trajets', trajetRouter);
-
+app.use('/api/payments', paymentRouter);
 // Route de santé
 app.get('/api/health', (req, res) => {
   res.status(200).json({
