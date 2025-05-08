@@ -118,7 +118,7 @@ exports.createReservation = async (req, res) => {
     const cancel_url   = `${FRONTEND_URL}/reservation/${order_id}`;
 
     // Construct string to hash
-    const rawString = `${order_id};${amount_100};XOF;${callback_url};${API_SECRET}`.toUpperCase();
+    const rawString = `${order_id};${amount_100};XOF;${callback_url};${API_SECRET}`;
     const firstHash = crypto.createHash('sha1')
     .update(rawString)
     .digest('hex');
