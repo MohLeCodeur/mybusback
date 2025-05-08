@@ -112,7 +112,7 @@ exports.createReservation = async (req, res) => {
     const order_id     = reservation._id.toString().toUpperCase();
     const montantFCFA  = trajet.prix * reservation.placesReservees;
     const amount_100   = montantFCFA * 100;
-    const callback_url = `${BACKEND_URL}/api/vitepay/callback`;
+    const callback_url = 'https://mybusback.onrender.com/api/vitepay/callback';
     const return_url   = `${FRONTEND_URL}/confirmation/${order_id}`;
     const decline_url  = `${FRONTEND_URL}/payment-failed`;
     const cancel_url   = `${FRONTEND_URL}/reservation/${order_id}`;
