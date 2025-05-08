@@ -119,10 +119,14 @@ exports.createReservation = async (req, res) => {
 
     // Construct string to hash
     const rawString = `${order_id};${amount_100};XOF;${callback_url};${API_SECRET}`.toUpperCase();
-    const hash      = crypto.createHash('sha1')
-      .update(rawString)
-      .digest('hex')
-      .toUpperCase();
+    const firstHash = crypto.createHash('sha1')
+    .update(rawString)
+    .digest('hex');
+  
+  const hash = crypto.createHash('sha1')
+    .update(firstHash)
+    .digest('hex');
+  
 
     // Build payload
     const payload = {
