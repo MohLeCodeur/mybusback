@@ -6,7 +6,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const morgan = require('morgan');
 const paymentRouter = require('./routes/payments');
-
+const vitepayRouter = require('./routes/vitepay');
 // Initialisation de l'application Express
 const app = express();
 
@@ -77,6 +77,7 @@ mongoose.connection.on('disconnected', () => {
 const reservationRouter = require('./routes/reservations');
 const trajetRouter = require('./routes/trajets');
 
+app.use('/api/vitepay', vitepayRouter);
 app.use('/api/reservations', reservationRouter);
 app.use('/api/trajets', trajetRouter);
 app.use('/api/payments', paymentRouter);

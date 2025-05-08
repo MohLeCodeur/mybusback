@@ -10,7 +10,7 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "axios": "^1.8.4",
+    "axios": "^1.9.0",
     "cinetpay-nodejs": "^1.0.2",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",

@@ -10,7 +10,11 @@ const reservationSchema = new mongoose.Schema({
   },
   placesReservees: { type: Number, required: true, min: 1 },
   dateReservation: { type: Date, default: Date.now },
-  statut: { type: String, enum: ['confirmée', 'annulée'], default: 'confirmée' }
+  statut: {
+    type: String,
+    enum: ['en_attente', 'confirmée', 'annulée'],   // ← ajout de 'en_attente'
+    default: 'en_attente'                           // ← on peut le mettre par défaut
+  }
 });
 
 module.exports = mongoose.model('Reservation', reservationSchema);
