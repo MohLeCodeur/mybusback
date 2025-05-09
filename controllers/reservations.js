@@ -159,7 +159,7 @@ const hash = crypto.createHash('sha1').update(raw).digest('hex'); // ✅ une seu
     console.log('← VitePay success response:', response.data);
 
     // Respond with checkout URL
-    const checkoutUrl = response.data.redirect_url;
+    const checkoutUrl = response.data.redirect_url || response.data;
     return res.status(201).json({ reservationId: order_id, checkoutUrl });
   } catch (err) {
     if (err.response) {
