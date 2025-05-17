@@ -1,60 +1,91 @@
-require('dotenv').config();
-const mongoose = require('mongoose');
-const Trajet = require('./models/Trajet');
-const Reservation = require('./models/Reservation');
+/* ─────────────────────────────────────────────
+ *  seed.js — peupler la collection trajets
+ *  Usage :
+ *    1) npm i mongodb dotenv
+ *    2) créer .env  →  MONGO_URI=...
+ *    3) node seed.js       # ou  npm run seed
+ * ────────────────────────────────────────────*/
+require('dotenv').config()
+const { MongoClient } = require('mongodb')
 
-const villes = ['Bamako', 'Sikasso', 'Ségou', 'Mopti', 'Kayes', 'Koulikoro', 'Gao', 'Tombouctou'];
+// 1) Connexion
+const uri  = process.env.MONGO_URI
+if (!uri) throw new Error('⚠️  Ajoutez MONGO_URI dans .env')
+const client = new MongoClient(uri)
 
-async function seedDB() {
+;(async () => {
   try {
-    console.log('Tentative de connexion à MongoDB Atlas...');
-    
-    await mongoose.connect(process.env.MONGODB_URI, {
-      serverSelectionTimeoutMS: 5000,
-      socketTimeoutMS: 45000
-    });
+    await client.connect()
+    console.log('✅ Connected to MongoDB')
 
-    console.log('✅ Connecté à MongoDB Atlas');
+    const db      = client.db()           // la base dans l’URI (ex. transport_mali)
+    const trajets = db.collection('trajets')
 
-    // Nettoyage de la base
-    console.log('Nettoyage de la base de données...');
-    await Trajet.deleteMany({});
-    await Reservation.deleteMany({});
+    // 2) Échantillon de compagnies maliennes (non exhaustif)
+    const companies = [
+      'Diarra Transport',
+      'Bani Transport',
+      'Sonef Mali',
+      'Oumar Touré Voyages',
+      'Bakary Trans',
+      'Star Voyage',
+      'African Bus Mali'
+    ]
 
-    // Création des trajets
-    const trajets = [];
-    for (let i = 0; i < 20; i++) {
-      const villeDepart = villes[Math.floor(Math.random() * villes.length)];
-      let villeArrivee;
-      do {
-        villeArrivee = villes[Math.floor(Math.random() * villes.length)];
-      } while (villeArrivee === villeDepart);
+    // 3) Villes et prix de référence
+    const villes = ['Bamako', 'Sikasso', 'Kayes', 'Mopti', 'Ségou', 'Gao', 'Tombouctou']
+    const prixKm = 75   // FCFA/km fictif
 
-      const trajet = new Trajet({
-        villeDepart,
-        villeArrivee,
-        dateDepart: new Date(Date.now() + Math.random() * 30 * 24 * 60 * 60 * 1000),
-        heureDepart: `${Math.floor(Math.random() * 24)}:${Math.random() > 0.5 ? '00' : '30'}`,
-        prix: 5000 + Math.floor(Math.random() * 20000),
-        placesDisponibles: 10 + Math.floor(Math.random() * 40),
-        bus: {
-          numero: `BUS-${1000 + i}`,
-          capacite: 50
-        }
-      });
+    // 4) Générer quelques dates/heures proches
+    const dates = Array.from({ length: 7 }, (_, i) => {
+      const d = new Date()
+      d.setDate(d.getDate() + i)          // J+0 … J+6
+      d.setHours(0, 0, 0, 0)
+      return d
+    })
+    const heures = ['07:00', '11:30', '14:45', '18:00']
 
-      await trajet.save();
-      trajets.push(trajet);
-      console.log(`Trajet créé: ${villeDepart} → ${villeArrivee}`);
+    // 5) Fonction utilitaire distance (fictif)
+    const dist = (from, to) => {
+      const idx = Math.abs(villes.indexOf(from) - villes.indexOf(to)) + 1
+      return idx * 100 + 50               // km approximatifs
     }
 
-    console.log(`✅ ${trajets.length} trajets créés avec succès`);
-    process.exit(0);
-  } catch (err) {
-    console.error('❌ Erreur lors du seeding:', err.message);
-    console.error('Détails techniques:', err);
-    process.exit(1);
-  }
-}
+    // 6) Construit 35 trajets variés
+    const docs = []
+    villes.forEach(dep => {
+      villes.filter(v => v !== dep).forEach(arr => {
+        companies.slice(0, 4).forEach(comp => {          // 4 compagnies
+          dates.slice(0, 5).forEach(date => {            // 5 prochains jours
+            heures.slice(0, 2).forEach(h => {           // 2 horaires
+              const prix = dist(dep, arr) * prixKm
+              docs.push({
+                villeDepart:  dep,
+                villeArrivee: arr,
+                compagnie:    comp,
+                dateDepart:   date,
+                heureDepart:  h,
+                prix,
+                placesDisponibles: 40,
+                bus: {
+                  numero:   `B-${Math.floor(Math.random()*900)+100}`,
+                  capacite: 50
+                }
+              })
+            })
+          })
+        })
+      })
+    })
 
-seedDB();
+    // 7) Purge optionnelle puis insertion
+    await trajets.deleteMany({})                // commentez si vous voulez préserver l’existant
+    const { insertedCount } = await trajets.insertMany(docs)
+    console.log(`✅ ${insertedCount} trajets insérés.`)
+  } catch (err) {
+    console.error(err)
+  } finally {
+    await client.close()
+    process.exit(0)
+  }
+})()
