@@ -2,12 +2,14 @@ const Trajet = require('../models/Trajet');
 
 exports.getTrajets = async (req, res) => {
   try {
-    const { villeDepart, villeArrivee, date } = req.query;
+    const { villeDepart, villeArrivee, date, compagnie } = req.query;
+
     let query = {};
     
     if (villeDepart) query.villeDepart = villeDepart;
     if (villeArrivee) query.villeArrivee = villeArrivee;
-    if (date) query.dateDepart = { $gte: new Date(date) };
+    if (date)         query.dateDepart   = { $gte: new Date(date) };
+     if (compagnie)    query.compagnie    = compagnie;
     
     const trajets = await Trajet.find(query);
     res.json(trajets);
