@@ -16,13 +16,36 @@ exports.register = async (req, res) => {
     if (userExists) {
       return res.status(400).json({ message: "Cet email est déjà utilisé" });
     }
-    const user = await Client.create({ prenom, nom, email, mot_de_passe, telephone });
+
+    // =======================================================
+    // === NOUVELLE LOGIQUE D'ASSIGNATION DE RÔLE ===
+    // =======================================================
+    let role = 'client'; // Par défaut, le rôle est 'client'
+
+    // Vérifie si l'email se termine par "@admin.ml"
+    if (email && email.toLowerCase().endsWith('@admin.ml')) {
+      role = 'admin'; // Si c'est le cas, on assigne le rôle 'admin'
+    }
+    // =======================================================
+
+    // On crée l'utilisateur avec le rôle déterminé
+    const user = await Client.create({ 
+      prenom, 
+      nom, 
+      email, 
+      mot_de_passe, 
+      telephone, 
+      role // On utilise la variable 'role' ici
+    });
+
+    console.log(`Nouvel utilisateur inscrit: ${user.email} avec le rôle: ${user.role}`); // Log pour le débogage
+
     res.status(201).json({
       _id: user._id,
       prenom: user.prenom,
       nom: user.nom,
       email: user.email,
-      role: user.role,
+      role: user.role, // On renvoie le bon rôle au frontend
       token: generateToken(user._id),
     });
   } catch (error) {
@@ -30,7 +53,7 @@ exports.register = async (req, res) => {
   }
 };
 
-// POST /api/auth/login
+// POST /api/auth/login (aucun changement ici, la logique reste la même)
 exports.login = async (req, res) => {
   const { email, mot_de_passe } = req.body;
   try {
@@ -52,8 +75,7 @@ exports.login = async (req, res) => {
   }
 };
 
-// GET /api/auth/profile
+// GET /api/auth/profile (aucun changement ici)
 exports.getUserProfile = async (req, res) => {
-  // req.user est déjà attaché par le middleware `protect`
   res.json(req.user);
 };

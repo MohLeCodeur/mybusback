@@ -5,11 +5,16 @@ const crypto = require('crypto');
 const Reservation = require('../models/reservation.model');
 const Trajet = require('../models/trajet.model');
 
+// Définition de l'URL de l'API VitePay en fonction de l'environnement
 const VITEPAY_API = process.env.NODE_ENV === 'production'
   ? 'https://api.vitepay.com/v1/prod/payments'
   : 'https://api.vitepay.com/v1/test/payments';
 
-// PUBLIC - Créer une réservation et initier le paiement
+/**
+ * @desc    Créer une réservation et initier le paiement VitePay
+ * @route   POST /api/reservations
+ * @access  Privé (client connecté)
+ */
 exports.createReservationAndPay = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -17,18 +22,23 @@ exports.createReservationAndPay = async (req, res) => {
   try {
     const { trajetId, passagers } = req.body;
     const placesReservees = passagers.length;
-    const clientId = req.user._id; // ID du client connecté via le middleware
 
-    // 1. Vérifier le trajet et la disponibilité
+    // req.user est fourni par le middleware `protect`
+    if (!req.user) {
+      return res.status(401).json({ message: 'Utilisateur non authentifié.' });
+    }
+    const clientId = req.user._id;
+
+    // 1. Vérifier le trajet et la disponibilité des places
     const trajet = await Trajet.findById(trajetId).session(session);
     if (!trajet) {
-        throw new Error('Trajet non trouvé');
+      throw new Error('Trajet non trouvé');
     }
     if (trajet.placesDisponibles < placesReservees) {
-        throw new Error(`Seulement ${trajet.placesDisponibles} places disponibles`);
+      throw new Error(`Seulement ${trajet.placesDisponibles} places sont disponibles pour ce trajet.`);
     }
 
-    // 2. Créer la réservation
+    // 2. Créer le document de réservation
     const reservation = new Reservation({
       trajet: trajetId,
       client: clientId,
@@ -38,11 +48,11 @@ exports.createReservationAndPay = async (req, res) => {
     });
     await reservation.save({ session });
 
-    // 3. Mettre à jour les places
+    // 3. Mettre à jour le nombre de places disponibles pour le trajet
     trajet.placesDisponibles -= placesReservees;
     await trajet.save({ session });
 
-    // 4. Préparer le paiement VitePay
+    // 4. Préparer et initier la requête de paiement vers VitePay
     const order_id = reservation._id.toString();
     const montantFCFA = trajet.prix * placesReservees;
     const amount_100 = montantFCFA * 100;
@@ -70,7 +80,7 @@ exports.createReservationAndPay = async (req, res) => {
       api_key: process.env.VITEPAY_API_KEY,
       hash,
       redirect: 0,
-       ...(process.env.NODE_ENV !== 'production' ? { is_test: 1 } : {})
+      ...(process.env.NODE_ENV !== 'production' ? { is_test: 1 } : {})
     };
 
     const vitepayResponse = await axios.post(VITEPAY_API, payload);
@@ -80,10 +90,12 @@ exports.createReservationAndPay = async (req, res) => {
       throw new Error("Impossible d'obtenir l'URL de paiement de VitePay.");
     }
     
+    // Si tout réussit, on valide la transaction
     await session.commitTransaction();
     res.status(201).json({ reservationId: order_id, checkoutUrl });
 
   } catch (err) {
+    // En cas d'erreur, on annule tout ce qui a été fait
     await session.abortTransaction();
     console.error('Erreur createReservationAndPay:', err.response?.data || err.message);
     res.status(400).json({ message: err.message });
@@ -92,7 +104,11 @@ exports.createReservationAndPay = async (req, res) => {
   }
 };
 
-// PUBLIC - Récupérer une réservation par ID (pour la page de confirmation)
+/**
+ * @desc    Récupérer une réservation par son ID (pour la page de confirmation)
+ * @route   GET /api/reservations/:id
+ * @access  Privé (client connecté)
+ */
 exports.getReservationByIdPublic = async (req, res) => {
     try {
         const reservation = await Reservation.findById(req.params.id)
@@ -101,23 +117,51 @@ exports.getReservationByIdPublic = async (req, res) => {
         if (!reservation) {
             return res.status(404).json({ message: "Réservation non trouvée" });
         }
+        // On vérifie que l'utilisateur qui demande est bien le propriétaire de la réservation ou un admin
+        if (reservation.client._id.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+            return res.status(403).json({ message: "Accès non autorisé à cette réservation." });
+        }
         res.json(reservation);
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
 };
 
-// ADMIN - Obtenir toutes les réservations
+
+// ===============================================
+// SECTION ADMINISTRATEUR
+// ===============================================
+
+/**
+ * @desc    Obtenir toutes les réservations (pour l'admin)
+ * @route   GET /api/admin/reservations/all
+ * @access  Admin
+ */
 exports.getAllReservationsAdmin = async (req, res) => {
   try {
-    const list = await Reservation.find().populate("trajet bus client").sort({ dateReservation: -1 });
+    const list = await Reservation.find()
+      .populate('client', 'prenom nom email') // Peuple les infos du client
+      .populate({
+        path: 'trajet', // Peuple le trajet...
+        populate: {
+          path: 'bus', // ...et à l'intérieur du trajet, peuple le bus
+          model: 'Bus' // Il est bon de spécifier le modèle
+        }
+      })
+      .sort({ dateReservation: -1 });
+
     res.json(list);
   } catch (err) {
+    console.error("Erreur getAllReservationsAdmin:", err);
     res.status(500).json({ message: err.message });
   }
 };
 
-// ADMIN - Mettre à jour une réservation
+/**
+ * @desc    Mettre à jour une réservation (pour l'admin)
+ * @route   PUT /api/admin/reservations/:id
+ * @access  Admin
+ */
 exports.updateReservationAdmin = async (req, res) => {
   try {
     const r = await Reservation.findByIdAndUpdate(req.params.id, req.body, {
@@ -131,18 +175,25 @@ exports.updateReservationAdmin = async (req, res) => {
   }
 };
 
-// ADMIN - Supprimer une réservation
+/**
+ * @desc    Supprimer une réservation (pour l'admin)
+ * @route   DELETE /api/admin/reservations/:id
+ * @access  Admin
+ */
 exports.deleteReservationAdmin = async (req, res) => {
   try {
-    // Logique pour remettre les places disponibles dans le trajet
+    // Optionnel mais recommandé : remettre les places dans le trajet
     const reservation = await Reservation.findById(req.params.id);
-    if (reservation) {
+    if (reservation && reservation.statut === 'confirmée') { // On ne remet que si la place était prise
         await Trajet.findByIdAndUpdate(reservation.trajet, {
             $inc: { placesDisponibles: reservation.placesReservees }
         });
     }
-    const r = await Reservation.findByIdAndDelete(req.params.id);
-    if (!r) return res.status(404).json({ message: "Réservation non trouvée" });
+
+    const deletedReservation = await Reservation.findByIdAndDelete(req.params.id);
+    if (!deletedReservation) {
+      return res.status(404).json({ message: "Réservation non trouvée" });
+    }
     res.json({ message: "Réservation supprimée avec succès" });
   } catch (err) {
     res.status(500).json({ message: err.message });

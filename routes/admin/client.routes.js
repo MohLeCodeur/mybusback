@@ -7,10 +7,10 @@ const {
   connecterClient,
   profilClient,
   // inscrireClientAdmin, // Commentez ou supprimez si la fonction contrôleur est supprimée
-} = require("../controllers/client.controller");
+} = require("../../controllers/client.controller");
 
 const protect = require("../middlewares/auth");
-const { isAdmin } = require("../middlewares/role");
+const { isAdmin } = require("../../middlewares/role");
 
 // ---------- Routes PUBLIQUES ----------
 // L'inscription se fait maintenant via cette route unique, le rôle est déterminé par l'email
