@@ -1,26 +1,51 @@
 // backend/controllers/trajet.controller.js
 const Trajet = require('../models/trajet.model');
 
-// PUBLIC - Recherche de trajets avec pagination
+/**
+ * @desc    Rechercher des trajets pour l'interface publique (avec filtres et pagination)
+ * @route   GET /api/public/trajets/search
+ * @access  Public
+ */
 exports.searchTrajets = async (req, res) => {
   try {
     const { villeDepart, villeArrivee, date, limit = 15, page = 1 } = req.query;
 
-    const query = {};
-    if (villeDepart) query.villeDepart = { $regex: new RegExp(villeDepart, 'i') };
-    if (villeArrivee) query.villeArrivee = { $regex: new RegExp(villeArrivee, 'i') };
-    if (date) {
-        const startDate = new Date(date);
-        startDate.setHours(0, 0, 0, 0);
-        const endDate = new Date(date);
-        endDate.setHours(23, 59, 59, 999);
-        query.dateDepart = { $gte: startDate, $lte: endDate };
+    let queryFilter = { isActive: true }; // Par défaut, on ne cherche que les trajets actifs
+
+    if (villeDepart) {
+        queryFilter.villeDepart = { $regex: new RegExp(`^${villeDepart}$`, 'i') };
     }
+    if (villeArrivee) {
+        queryFilter.villeArrivee = { $regex: new RegExp(`^${villeArrivee}$`, 'i') };
+    }
+
+    // --- LOGIQUE DE DATE ROBUSTE ---
+    if (date) {
+        // Si une date est spécifiée (ex: "2025-06-08"), on construit une plage pour toute cette journée en UTC.
+        // Cela garantit que le fuseau horaire du serveur n'affecte pas le résultat.
+        const startDate = new Date(`${date}T00:00:00.000Z`);
+        const endDate = new Date(`${date}T23:59:59.999Z`);
+        
+        queryFilter.dateDepart = { $gte: startDate, $lte: endDate };
+    } else {
+        // Si AUCUNE date n'est fournie, on affiche les trajets à partir du début de la journée actuelle.
+        const today = new Date();
+        today.setUTCHours(0, 0, 0, 0); // Remet l'heure à minuit UTC pour inclure tous les trajets du jour.
+        
+        queryFilter.dateDepart = { $gte: today };
+    }
+    // -----------------------------
+
+    console.log("Filtre de recherche de trajet appliqué :", JSON.stringify(queryFilter));
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const [docs, total] = await Promise.all([
-      Trajet.find(query).populate('bus', 'numero capacite').skip(skip).limit(parseInt(limit)).sort({ dateDepart: 1 }),
-      Trajet.countDocuments(query)
+      Trajet.find(queryFilter)
+        .populate('bus', 'numero capacite etat') // On peut aussi récupérer l'état du bus
+        .sort({ dateDepart: 1 }) // Trier par date de départ croissante
+        .skip(skip)
+        .limit(parseInt(limit)),
+      Trajet.countDocuments(queryFilter)
     ]);
 
     res.json({
@@ -30,61 +55,95 @@ exports.searchTrajets = async (req, res) => {
       pages: Math.ceil(total / parseInt(limit))
     });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    console.error("Erreur [searchTrajets]:", err);
+    res.status(500).json({ message: "Erreur serveur lors de la recherche des trajets." });
   }
 };
 
-// PUBLIC - Récupérer un trajet par ID
+
+/**
+ * @desc    Récupérer les détails d'un seul trajet pour l'interface publique
+ * @route   GET /api/public/trajets/:id
+ * @access  Public
+ */
 exports.getTrajetByIdPublic = async (req, res) => {
     try {
         const trajet = await Trajet.findById(req.params.id).populate('bus');
-        if (!trajet) return res.status(404).json({ message: 'Trajet non trouvé' });
+        if (!trajet) {
+          return res.status(404).json({ message: 'Trajet non trouvé' });
+        }
         res.json(trajet);
     } catch (err) {
-        res.status(500).json({ message: err.message });
+        console.error("Erreur [getTrajetByIdPublic]:", err);
+        res.status(500).json({ message: "Erreur serveur." });
     }
 };
 
 
-// ADMIN - Créer un trajet
+// ===============================================
+// SECTION ADMINISTRATEUR
+// ===============================================
+
+/**
+ * @desc    Créer un nouveau trajet
+ * @route   POST /api/admin/trajets
+ * @access  Admin
+ */
 exports.createTrajet = async (req, res) => {
   try {
-    const t = await Trajet.create(req.body);
-    res.status(201).json(t);
+    const newTrajet = new Trajet(req.body);
+    const savedTrajet = await newTrajet.save();
+    res.status(201).json(savedTrajet);
   } catch (err) {
     res.status(400).json({ message: err.message });
   }
 };
 
-// ADMIN - Récupérer tous les trajets (pour la gestion)
+/**
+ * @desc    Récupérer tous les trajets pour le tableau de bord admin
+ * @route   GET /api/admin/trajets
+ * @access  Admin
+ */
 exports.getAllTrajetsAdmin = async (req, res) => {
   try {
-    const list = await Trajet.find().populate('bus');
-    res.json(list);
+    const trajets = await Trajet.find({}).populate('bus').sort({ dateDepart: -1 });
+    res.json(trajets);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 };
 
-// ADMIN - Mettre à jour un trajet
+/**
+ * @desc    Mettre à jour un trajet existant
+ * @route   PUT /api/admin/trajets/:id
+ * @access  Admin
+ */
 exports.updateTrajet = async (req, res) => {
   try {
-    const t = await Trajet.findByIdAndUpdate(req.params.id, req.body, {
-      new: true,
-      runValidators: true,
+    const updatedTrajet = await Trajet.findByIdAndUpdate(req.params.id, req.body, {
+      new: true, // Renvoie le document mis à jour
+      runValidators: true, // Exécute les validateurs du schéma
     });
-    if (!t) return res.status(404).json({ message: "Trajet non trouvé" });
-    res.json(t);
+    if (!updatedTrajet) {
+      return res.status(404).json({ message: "Trajet non trouvé" });
+    }
+    res.json(updatedTrajet);
   } catch (err) {
     res.status(400).json({ message: err.message });
   }
 };
 
-// ADMIN - Supprimer un trajet
+/**
+ * @desc    Supprimer un trajet
+ * @route   DELETE /api/admin/trajets/:id
+ * @access  Admin
+ */
 exports.deleteTrajet = async (req, res) => {
   try {
-    const t = await Trajet.findByIdAndDelete(req.params.id);
-    if (!t) return res.status(404).json({ message: "Trajet supprimé" });
+    const deletedTrajet = await Trajet.findByIdAndDelete(req.params.id);
+    if (!deletedTrajet) {
+      return res.status(404).json({ message: "Trajet non trouvé" });
+    }
     res.json({ message: "Trajet supprimé avec succès" });
   } catch (err) {
     res.status(500).json({ message: err.message });
