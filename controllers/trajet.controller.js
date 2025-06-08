@@ -2,52 +2,33 @@
 const Trajet = require('../models/trajet.model');
 
 /**
- * @desc    Rechercher des trajets pour l'interface publique (avec filtres et pagination)
+ * @desc    Rechercher des trajets - VERSION DE TEST 1
  * @route   GET /api/public/trajets/search
  * @access  Public
  */
 exports.searchTrajets = async (req, res) => {
   try {
-    const { villeDepart, villeArrivee, date, limit = 15, page = 1 } = req.query;
+    // --- TEST 1 : ON IGNORE TOUS LES FILTRES POUR VOIR SI DES DONNÉES EXISTENT ---
+    let queryFilter = {}; // Le filtre est complètement vide.
+    // --------------------------------------------------------------------------
+    
+    console.log("--- DÉBUT DU TEST 1 ---");
+    console.log("Filtre MongoDB appliqué (vide pour test) :", JSON.stringify(queryFilter));
 
-    let queryFilter = { isActive: true }; // Par défaut, on ne cherche que les trajets actifs
-
-    // --- CORRECTION DE LA LOGIQUE DE RECHERCHE TEXTUELLE ---
-    if (villeDepart) {
-      // Recherche si le nom de la ville CONTIENT la chaîne, insensible à la casse.
-      // C'est plus flexible qu'une correspondance exacte.
-      queryFilter.villeDepart = { $regex: villeDepart, $options: 'i' };
-    }
-    if (villeArrivee) {
-      // Fait de même pour la ville d'arrivée.
-      queryFilter.villeArrivee = { $regex: villeArrivee, $options: 'i' };
-    }
-    // ----------------------------------------------------
-
-    // Logique de date robuste (ne change pas)
-    if (date) {
-      const startDate = new Date(`${date}T00:00:00.000Z`);
-      const endDate = new Date(`${date}T23:59:59.999Z`);
-      queryFilter.dateDepart = { $gte: startDate, $lte: endDate };
-    } else {
-      const today = new Date();
-      today.setUTCHours(0, 0, 0, 0); 
-      queryFilter.dateDepart = { $gte: today };
-    }
-
-    console.log("Filtre MongoDB appliqué pour la recherche de trajets :", JSON.stringify(queryFilter));
-
+    const { limit = 15, page = 1 } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
+    
     const [docs, total] = await Promise.all([
       Trajet.find(queryFilter)
         .populate('bus', 'numero capacite etat')
-        .sort({ dateDepart: 1 })
+        .sort({ dateDepart: 1 }) // On garde le tri pour la cohérence
         .skip(skip)
         .limit(parseInt(limit)),
       Trajet.countDocuments(queryFilter)
     ]);
     
-    console.log(`Recherche terminée. ${total} trajet(s) trouvé(s) au total, ${docs.length} renvoyé(s) pour la page ${page}.`);
+    console.log(`RÉSULTAT DU TEST 1 : ${total} trajet(s) trouvé(s) au total, ${docs.length} renvoyé(s) pour la page ${page}.`);
+    console.log("--- FIN DU TEST 1 ---");
 
     res.json({
       docs,
@@ -57,11 +38,15 @@ exports.searchTrajets = async (req, res) => {
     });
 
   } catch (err) {
-    console.error("Erreur [searchTrajets]:", err);
+    console.error("Erreur [searchTrajets - TEST 1]:", err);
     res.status(500).json({ message: "Erreur serveur lors de la recherche des trajets." });
   }
 };
 
+
+// ==============================================================
+// Les autres fonctions restent inchangées
+// ==============================================================
 
 /**
  * @desc    Récupérer les détails d'un seul trajet pour l'interface publique
@@ -80,11 +65,6 @@ exports.getTrajetByIdPublic = async (req, res) => {
         res.status(500).json({ message: "Erreur serveur." });
     }
 };
-
-
-// ===============================================
-// SECTION ADMINISTRATEUR
-// ===============================================
 
 /**
  * @desc    Créer un nouveau trajet
