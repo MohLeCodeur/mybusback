@@ -95,6 +95,21 @@ exports.updateStatutColis = async (req, res) => {
     return res.status(500).json({ message: err.message });
   }
 };
+exports.deleteColis = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const colis = await Colis.findByIdAndDelete(id);
+
+    if (!colis) {
+      return res.status(404).json({ message: "Colis non trouvé." });
+    }
+
+    res.json({ message: "Colis supprimé avec succès." });
+  } catch (err) {
+    console.error("Erreur deleteColis:", err);
+    res.status(500).json({ message: "Erreur serveur lors de la suppression du colis." });
+  }
+};
 
 exports.updateColis = async (req, res) => {
   try {

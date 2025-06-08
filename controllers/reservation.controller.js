@@ -242,4 +242,47 @@ exports.confirmReservationManually = async (req, res) => {
     }
 };
 
-exports.deleteReservationAdmin = async (req, res) => { /* ... */ };
+exports.deleteReservationAdmin = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { id } = req.params;
+    
+    // 1. Trouver la réservation à supprimer
+    const reservation = await Reservation.findById(id).session(session);
+    if (!reservation) {
+      throw new Error("Réservation non trouvée.");
+    }
+
+    // 2. Si la réservation était confirmée, on libère les places
+    if (reservation.statut === 'confirmée') {
+      await Trajet.findByIdAndUpdate(
+        reservation.trajet,
+        { $inc: { placesDisponibles: reservation.placesReservees } }, // Incrémente les places
+        { session }
+      );
+      console.log(`Places libérées pour le trajet ${reservation.trajet}`);
+    }
+
+    // 3. Supprimer la réservation
+    const deletedReservation = await Reservation.findByIdAndDelete(id, { session });
+    if (!deletedReservation) {
+      // Cette erreur ne devrait pas arriver si le findById a fonctionné, mais c'est une sécurité
+      throw new Error("La suppression a échoué.");
+    }
+
+    // 4. Valider la transaction
+    await session.commitTransaction();
+    
+    res.json({ message: "Réservation supprimée avec succès et places libérées." });
+
+  } catch (err) {
+    // En cas d'erreur, tout est annulé
+    await session.abortTransaction();
+    console.error("Erreur deleteReservationAdmin:", err);
+    res.status(err.message.includes("non trouvée") ? 404 : 500).json({ message: err.message });
+  } finally {
+    session.endSession();
+  }
+};
