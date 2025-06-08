@@ -13,40 +13,48 @@ exports.searchTrajets = async (req, res) => {
     let queryFilter = { isActive: true }; // Par défaut, on ne cherche que les trajets actifs
 
     if (villeDepart) {
-        queryFilter.villeDepart = { $regex: new RegExp(`^${villeDepart}$`, 'i') };
+      // Recherche exacte insensible à la casse
+      queryFilter.villeDepart = { $regex: new RegExp(`^${villeDepart}$`, 'i') };
     }
     if (villeArrivee) {
-        queryFilter.villeArrivee = { $regex: new RegExp(`^${villeArrivee}$`, 'i') };
+      // Recherche exacte insensible à la casse
+      queryFilter.villeArrivee = { $regex: new RegExp(`^${villeArrivee}$`, 'i') };
     }
 
-    // --- LOGIQUE DE DATE ROBUSTE ---
+    // --- LOGIQUE DE DATE ULTRA-STRICTE ET INDÉPENDANTE DU SERVEUR ---
     if (date) {
-        // Si une date est spécifiée (ex: "2025-06-08"), on construit une plage pour toute cette journée en UTC.
-        // Cela garantit que le fuseau horaire du serveur n'affecte pas le résultat.
-        const startDate = new Date(`${date}T00:00:00.000Z`);
-        const endDate = new Date(`${date}T23:59:59.999Z`);
-        
-        queryFilter.dateDepart = { $gte: startDate, $lte: endDate };
-    } else {
-        // Si AUCUNE date n'est fournie, on affiche les trajets à partir du début de la journée actuelle.
-        const today = new Date();
-        today.setUTCHours(0, 0, 0, 0); // Remet l'heure à minuit UTC pour inclure tous les trajets du jour.
-        
-        queryFilter.dateDepart = { $gte: today };
-    }
-    // -----------------------------
+      // Si une date est fournie (ex: "2025-06-08"), on crée une plage de 24h en UTC.
+      // Cela évite tous les problèmes de fuseau horaire.
+      const startDate = new Date(`${date}T00:00:00.000Z`);
+      const endDate = new Date(`${date}T23:59:59.999Z`);
+      
+      queryFilter.dateDepart = { $gte: startDate, $lte: endDate };
 
-    console.log("Filtre de recherche de trajet appliqué :", JSON.stringify(queryFilter));
+    } else {
+      // Si AUCUNE date n'est fournie, on cherche à partir du DÉBUT de la journée actuelle en UTC.
+      // Cela inclut tous les trajets d'aujourd'hui, même ceux dont l'heure est passée.
+      const today = new Date();
+      today.setUTCHours(0, 0, 0, 0); 
+      
+      queryFilter.dateDepart = { $gte: today };
+    }
+    // -----------------------------------------------------------------
+
+    // LOG DE DÉBOGAGE : Affiche le filtre final dans la console du serveur
+    console.log("Filtre MongoDB appliqué pour la recherche de trajets :", JSON.stringify(queryFilter));
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const [docs, total] = await Promise.all([
       Trajet.find(queryFilter)
-        .populate('bus', 'numero capacite etat') // On peut aussi récupérer l'état du bus
-        .sort({ dateDepart: 1 }) // Trier par date de départ croissante
+        .populate('bus', 'numero capacite etat')
+        .sort({ dateDepart: 1 }) // Trier les résultats par date de départ
         .skip(skip)
         .limit(parseInt(limit)),
       Trajet.countDocuments(queryFilter)
     ]);
+    
+    // LOG DE DÉBOGAGE : Affiche le nombre de résultats trouvés
+    console.log(`Recherche terminée. ${total} trajet(s) trouvé(s) au total, ${docs.length} renvoyé(s) pour la page ${page}.`);
 
     res.json({
       docs,
@@ -54,6 +62,7 @@ exports.searchTrajets = async (req, res) => {
       page: parseInt(page),
       pages: Math.ceil(total / parseInt(limit))
     });
+
   } catch (err) {
     console.error("Erreur [searchTrajets]:", err);
     res.status(500).json({ message: "Erreur serveur lors de la recherche des trajets." });
