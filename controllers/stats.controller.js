@@ -1,55 +1,64 @@
 // backend/controllers/stats.controller.js
 const Reservation = require("../models/reservation.model");
+const Colis = require("../models/colis.model");
 
 // GET /api/admin/stats/revenus?periode=weekly|monthly
 exports.getRevenus = async (req, res) => {
   try {
     const periode = req.query.periode === "monthly" ? "monthly" : "weekly";
-    let matchConditions = { statut: 'confirmée' }; // Filtre crucial : que les paiements réussis
+    let dateFilter = {};
 
-    // Définir la plage de dates en fonction de la période choisie
+    // Définir la plage de dates
     if (periode === "weekly") {
       const startDate = new Date();
       startDate.setDate(startDate.getDate() - 7);
       startDate.setHours(0, 0, 0, 0);
-      matchConditions.dateReservation = { $gte: startDate };
+      dateFilter = { $gte: startDate };
     } else { // monthly
       const startDate = new Date();
       startDate.setMonth(startDate.getMonth() - 12);
       startDate.setDate(1);
       startDate.setHours(0, 0, 0, 0);
-      matchConditions.dateReservation = { $gte: startDate };
+      dateFilter = { $gte: startDate };
     }
 
-    // Pipeline d'agrégation pour récupérer chaque transaction confirmée avec son revenu
-    const aggregationPipeline = [
-      { $match: matchConditions },
-      { 
-        $lookup: { 
-          from: "trajets", 
-          localField: "trajet", 
-          foreignField: "_id", 
-          as: "trajetInfo" 
-        } 
-      },
+    // --- 1. Agrégation pour les revenus des Réservations ---
+    const reservationsPromise = Reservation.aggregate([
+      { $match: { statut: 'confirmée', dateReservation: dateFilter } },
+      { $lookup: { from: "trajets", localField: "trajet", foreignField: "_id", as: "trajetInfo" } },
       { $unwind: "$trajetInfo" },
-      { 
-        $project: {
-          dateReservation: "$dateReservation",
+      { $project: {
+          date: "$dateReservation",
           revenue: { $multiply: ["$trajetInfo.prix", "$placesReservees"] }
-        }
-      }
+      }}
+    ]);
+
+    // --- 2. Agrégation pour les revenus des Colis ---
+    // (On suppose que tous les colis enregistrés représentent un revenu)
+    const colisPromise = Colis.aggregate([
+        { $match: { date_enregistrement: dateFilter } },
+        { $project: {
+            date: "$date_enregistrement",
+            revenue: "$prix"
+        }}
+    ]);
+
+    // Exécuter les deux agrégations en parallèle
+    const [reservationRevenues, colisRevenues] = await Promise.all([reservationsPromise, colisPromise]);
+
+    // --- 3. Combiner et calculer les statistiques ---
+    const allTransactions = [
+        ...reservationRevenues.map(r => ({ ...r, type: 'Billet' })),
+        ...colisRevenues.map(c => ({ ...c, type: 'Colis' }))
     ];
 
-    const transactions = await Reservation.aggregate(aggregationPipeline);
-
-    // Calculer les statistiques globales à partir des transactions
-    const totalRevenue = transactions.reduce((sum, item) => sum + item.revenue, 0);
-    const totalTransactions = transactions.length;
-
-    // Regrouper les données par jour ou par mois pour le graphique
-    const groupedForChart = transactions.reduce((acc, item) => {
-        const date = new Date(item.dateReservation);
+    const totalRevenue = allTransactions.reduce((sum, item) => sum + (item.revenue || 0), 0);
+    const totalRevenueBillets = reservationRevenues.reduce((sum, item) => sum + (item.revenue || 0), 0);
+    const totalRevenueColis = colisRevenues.reduce((sum, item) => sum + (item.revenue || 0), 0);
+    
+    // --- 4. Préparer les données pour le graphique ---
+    const groupedForChart = allTransactions.reduce((acc, item) => {
+        const date = new Date(item.date);
         let key;
         if (periode === 'weekly') {
             key = `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}`;
@@ -58,9 +67,14 @@ exports.getRevenus = async (req, res) => {
         }
         
         if (!acc[key]) {
-            acc[key] = { label: key, total: 0 };
+            acc[key] = { label: key, billets: 0, colis: 0 };
         }
-        acc[key].total += item.revenue;
+        
+        if(item.type === 'Billet') {
+            acc[key].billets += item.revenue;
+        } else if (item.type === 'Colis') {
+            acc[key].colis += item.revenue;
+        }
         
         return acc;
     }, {});
@@ -71,11 +85,13 @@ exports.getRevenus = async (req, res) => {
         return dateA - dateB;
     });
 
-    // Renvoyer un objet structuré au frontend
+    // Renvoyer l'objet structuré complet
     return res.json({
       summary: {
         totalRevenue,
-        totalTransactions,
+        totalRevenueBillets,
+        totalRevenueColis,
+        totalTransactions: allTransactions.length,
       },
       chartData,
     });
