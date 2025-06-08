@@ -100,12 +100,30 @@ exports.updateColis = async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
-    const colis = await Colis.findByIdAndUpdate(id, updates, {
-      new: true,
-      runValidators: true,
-    });
-    if (!colis) return res.status(404).json({ message: "Colis non trouvé" });
-    return res.json(colis);
+
+    // --- CORRECTION ET AMÉLIORATION DE LA LOGIQUE ---
+    
+    // 1. Récupérer le colis existant
+    const colis = await Colis.findById(id);
+    if (!colis) {
+      return res.status(404).json({ message: "Colis non trouvé" });
+    }
+
+    // 2. Appliquer les mises à jour du formulaire
+    Object.assign(colis, updates);
+
+    // 3. Le "hook" pre-save dans le modèle s'occupera de recalculer le prix
+    //    car nous allons utiliser .save() qui déclenche ce hook.
+    //    Le hook est déjà programmé pour recalculer le prix si poids, distance ou valeur sont modifiés.
+
+    // 4. Sauvegarder le document mis à jour
+    const updatedColis = await colis.save();
+    
+    // ------------------------------------------------
+
+    // 5. Renvoyer le colis mis à jour (avec le nouveau prix)
+    return res.json(updatedColis);
+
   } catch (err) {
     console.error("Erreur update colis :", err);
     return res.status(400).json({ message: err.message });
