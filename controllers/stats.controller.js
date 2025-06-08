@@ -1,90 +1,80 @@
 // backend/controllers/stats.controller.js
 const Reservation = require("../models/reservation.model");
 
-// GET /api/admin/stats/revenus?periode=weekly|monthly
 exports.getRevenus = async (req, res) => {
   try {
     const periode = req.query.periode === "monthly" ? "monthly" : "weekly";
-    let matchConditions = {};
+    let matchConditions = { statut: 'confirmée' };
     let groupId;
 
-    // --- CORRECTION : AJOUT DU FILTRE SUR LE STATUT ---
-    // On ne prend en compte que les réservations qui ont été confirmées (payées)
-    matchConditions.statut = 'confirmée';
-    // ----------------------------------------------------
-
     if (periode === "weekly") {
-      // Pour les 7 derniers jours
       const startDate = new Date();
       startDate.setDate(startDate.getDate() - 7);
       startDate.setHours(0, 0, 0, 0);
-
-      // La condition de date s'ajoute à la condition de statut
       matchConditions.dateReservation = { $gte: startDate };
-
-      // Regroupement par jour
-      groupId = {
-        year: { $year: "$dateReservation" },
-        month: { $month: "$dateReservation" },
-        day: { $dayOfMonth: "$dateReservation" },
-      };
-    } else { // monthly
-      // Pour les 12 derniers mois
+      groupId = { year: { $year: "$dateReservation" }, month: { $month: "$dateReservation" }, day: { $dayOfMonth: "$dateReservation" } };
+    } else {
       const startDate = new Date();
       startDate.setMonth(startDate.getMonth() - 12);
       startDate.setDate(1);
       startDate.setHours(0, 0, 0, 0);
-
       matchConditions.dateReservation = { $gte: startDate };
-
-      // Regroupement par mois
-      groupId = {
-        year: { $year: "$dateReservation" },
-        month: { $month: "$dateReservation" },
-      };
+      groupId = { year: { $year: "$dateReservation" }, month: { $month: "$dateReservation" } };
     }
 
-    const results = await Reservation.aggregate([
-      { $match: matchConditions }, // Étape 1: Filtre par statut ET par date
-      {
-        $lookup: { // Étape 2: Jointure avec la collection 'trajets'
-          from: "trajets",
-          localField: "trajet",
-          foreignField: "_id",
-          as: "trajetInfo",
-        },
-      },
-      { $unwind: "$trajetInfo" }, // Étape 3: "Déplie" le tableau
-      {
-        $group: { // Étape 4: Regroupe et calcule la somme
-          _id: groupId,
-          // Calcule le revenu en multipliant le prix du trajet par le nombre de places réservées
-          total: { $sum: { $multiply: ["$trajetInfo.prix", "$placesReservees"] } },
-        },
-      },
-      { $sort: { "_id.year": 1, "_id.month": 1, "_id.day": 1 } }, // Trier par date
-    ]);
+    // Pipeline d'agrégation
+    const aggregationPipeline = [
+      { $match: matchConditions },
+      { $lookup: { from: "trajets", localField: "trajet", foreignField: "_id", as: "trajetInfo" } },
+      { $unwind: "$trajetInfo" },
+      { $project: { // Calculer le revenu pour chaque réservation
+          dateReservation: "$dateReservation",
+          revenue: { $multiply: ["$trajetInfo.prix", "$placesReservees"] }
+      }}
+    ];
 
-    // Formater la réponse pour qu'elle soit facile à utiliser par Recharts
-    const data = results.map((item) => {
-        let label;
+    // Exécuter l'agrégation
+    const results = await Reservation.aggregate(aggregationPipeline);
+
+    // --- NOUVELLE PARTIE : Calculer les statistiques globales ---
+    const totalRevenue = results.reduce((sum, item) => sum + item.revenue, 0);
+    const totalTransactions = results.length;
+    // -----------------------------------------------------------
+    
+    // --- NOUVELLE PARTIE : Regrouper les résultats pour le graphique ---
+    const groupedData = results.reduce((acc, item) => {
+        let key;
         if (periode === 'weekly') {
-            // Formate la date en JJ/MM
-            const day = String(item._id.day).padStart(2, '0');
-            const month = String(item._id.month).padStart(2, '0');
-            label = `${day}/${month}`;
+            const date = new Date(item.dateReservation);
+            key = `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}`;
         } else {
-            // Formate le mois en MM/AAAA
-            const month = String(item._id.month).padStart(2, '0');
-            label = `${month}/${item._id.year}`;
+            const date = new Date(item.dateReservation);
+            key = `${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear()}`;
         }
-        return {
-          label: label,
-          total: item.total,
+        
+        if (!acc[key]) {
+            acc[key] = 0;
         }
-    });
+        acc[key] += item.revenue;
+        
+        return acc;
+    }, {});
 
-    return res.json(data);
+    const chartData = Object.keys(groupedData).map(key => ({
+        label: key,
+        total: groupedData[key]
+    })).sort((a,b) => new Date(a.label.split('/').reverse().join('-')) - new Date(b.label.split('/').reverse().join('-'))); // Trier par date
+    // -------------------------------------------------------------------
+
+    // Renvoyer l'objet structuré
+    return res.json({
+      summary: {
+        totalRevenue,
+        totalTransactions,
+      },
+      chartData,
+    });
+    
   } catch (err) {
     console.error("Erreur de calcul des statistiques de revenus:", err);
     return res.status(500).json({ message: err.message });
