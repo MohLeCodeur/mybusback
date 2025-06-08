@@ -12,48 +12,41 @@ exports.searchTrajets = async (req, res) => {
 
     let queryFilter = { isActive: true }; // Par défaut, on ne cherche que les trajets actifs
 
+    // --- CORRECTION DE LA LOGIQUE DE RECHERCHE TEXTUELLE ---
     if (villeDepart) {
-      // Recherche exacte insensible à la casse
-      queryFilter.villeDepart = { $regex: new RegExp(`^${villeDepart}$`, 'i') };
+      // Recherche si le nom de la ville CONTIENT la chaîne, insensible à la casse.
+      // C'est plus flexible qu'une correspondance exacte.
+      queryFilter.villeDepart = { $regex: villeDepart, $options: 'i' };
     }
     if (villeArrivee) {
-      // Recherche exacte insensible à la casse
-      queryFilter.villeArrivee = { $regex: new RegExp(`^${villeArrivee}$`, 'i') };
+      // Fait de même pour la ville d'arrivée.
+      queryFilter.villeArrivee = { $regex: villeArrivee, $options: 'i' };
     }
+    // ----------------------------------------------------
 
-    // --- LOGIQUE DE DATE ULTRA-STRICTE ET INDÉPENDANTE DU SERVEUR ---
+    // Logique de date robuste (ne change pas)
     if (date) {
-      // Si une date est fournie (ex: "2025-06-08"), on crée une plage de 24h en UTC.
-      // Cela évite tous les problèmes de fuseau horaire.
       const startDate = new Date(`${date}T00:00:00.000Z`);
       const endDate = new Date(`${date}T23:59:59.999Z`);
-      
       queryFilter.dateDepart = { $gte: startDate, $lte: endDate };
-
     } else {
-      // Si AUCUNE date n'est fournie, on cherche à partir du DÉBUT de la journée actuelle en UTC.
-      // Cela inclut tous les trajets d'aujourd'hui, même ceux dont l'heure est passée.
       const today = new Date();
       today.setUTCHours(0, 0, 0, 0); 
-      
       queryFilter.dateDepart = { $gte: today };
     }
-    // -----------------------------------------------------------------
 
-    // LOG DE DÉBOGAGE : Affiche le filtre final dans la console du serveur
     console.log("Filtre MongoDB appliqué pour la recherche de trajets :", JSON.stringify(queryFilter));
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const [docs, total] = await Promise.all([
       Trajet.find(queryFilter)
         .populate('bus', 'numero capacite etat')
-        .sort({ dateDepart: 1 }) // Trier les résultats par date de départ
+        .sort({ dateDepart: 1 })
         .skip(skip)
         .limit(parseInt(limit)),
       Trajet.countDocuments(queryFilter)
     ]);
     
-    // LOG DE DÉBOGAGE : Affiche le nombre de résultats trouvés
     console.log(`Recherche terminée. ${total} trajet(s) trouvé(s) au total, ${docs.length} renvoyé(s) pour la page ${page}.`);
 
     res.json({
@@ -130,8 +123,8 @@ exports.getAllTrajetsAdmin = async (req, res) => {
 exports.updateTrajet = async (req, res) => {
   try {
     const updatedTrajet = await Trajet.findByIdAndUpdate(req.params.id, req.body, {
-      new: true, // Renvoie le document mis à jour
-      runValidators: true, // Exécute les validateurs du schéma
+      new: true,
+      runValidators: true,
     });
     if (!updatedTrajet) {
       return res.status(404).json({ message: "Trajet non trouvé" });
