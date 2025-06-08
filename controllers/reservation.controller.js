@@ -19,19 +19,16 @@ const VITEPAY_API = process.env.NODE_ENV === 'production'
 
 // ... (imports)
 
+// Remplacez cette fonction dans backend/controllers/reservation.controller.js
+
 exports.createReservationAndPay = async (req, res) => {
   const session = await mongoose.startSession();
-  
-  // --- LIGNES CORRIGÉES ---
-  // On déclare toutes les variables nécessaires ici
   let reservation, trajet, passagers;
-  // -------------------------
 
   try {
     session.startTransaction();
 
     const { trajetId, contactEmail, contactTelephone } = req.body;
-    // On assigne la valeur à la variable passagers qui a déjà été déclarée
     passagers = req.body.passagers; 
     
     const placesReservees = passagers.length;
@@ -44,9 +41,7 @@ exports.createReservationAndPay = async (req, res) => {
     }
 
     trajet = await Trajet.findById(trajetId).session(session);
-    if (!trajet) {
-      throw new Error('Trajet non trouvé.');
-    }
+    if (!trajet) throw new Error('Trajet non trouvé.');
     if (trajet.placesDisponibles < placesReservees) {
       throw new Error(`Seulement ${trajet.placesDisponibles} places disponibles.`);
     }
@@ -73,7 +68,6 @@ exports.createReservationAndPay = async (req, res) => {
     session.endSession();
   }
 
-  // Maintenant, 'passagers' est accessible ici car elle a été déclarée au début
   try {
     const order_id = reservation._id.toString();
     const montantFCFA = trajet.prix * reservation.placesReservees;
@@ -85,6 +79,11 @@ exports.createReservationAndPay = async (req, res) => {
 
     const rawString = `${order_id};${amount_100};XOF;${callback_url};${process.env.VITEPAY_API_SECRET}`.toUpperCase();
     const hash = crypto.createHash('sha1').update(rawString).digest('hex');
+
+    // --- CORRECTION DE L'IP ---
+    const forwardedIps = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
+    const buyerIp = forwardedIps.split(',')[0].trim();
+    // -------------------------
 
     const payload = {
       payment: {
@@ -99,9 +98,9 @@ exports.createReservationAndPay = async (req, res) => {
         decline_url,
         cancel_url,
         callback_url,
-        buyer_ip_adress: req.headers['x-forwarded-for'] || req.socket.remoteAddress,
+        buyer_ip_adress: buyerIp, // Utilisation de l'IP nettoyée
         email: req.body.contactEmail,
-        buyer_name: `${passagers[0].prenom} ${passagers[0].nom}`, // C'est maintenant correct
+        buyer_name: `${passagers[0].prenom} ${passagers[0].nom}`,
         buyer_phone_number: req.body.contactTelephone,
       },
       redirect: 0,
