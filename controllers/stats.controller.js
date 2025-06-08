@@ -1,72 +1,77 @@
 // backend/controllers/stats.controller.js
 const Reservation = require("../models/reservation.model");
 
+// GET /api/admin/stats/revenus?periode=weekly|monthly
 exports.getRevenus = async (req, res) => {
   try {
     const periode = req.query.periode === "monthly" ? "monthly" : "weekly";
-    let matchConditions = { statut: 'confirmée' };
-    let groupId;
+    let matchConditions = { statut: 'confirmée' }; // Filtre crucial : que les paiements réussis
 
+    // Définir la plage de dates en fonction de la période choisie
     if (periode === "weekly") {
       const startDate = new Date();
       startDate.setDate(startDate.getDate() - 7);
       startDate.setHours(0, 0, 0, 0);
       matchConditions.dateReservation = { $gte: startDate };
-      groupId = { year: { $year: "$dateReservation" }, month: { $month: "$dateReservation" }, day: { $dayOfMonth: "$dateReservation" } };
-    } else {
+    } else { // monthly
       const startDate = new Date();
       startDate.setMonth(startDate.getMonth() - 12);
       startDate.setDate(1);
       startDate.setHours(0, 0, 0, 0);
       matchConditions.dateReservation = { $gte: startDate };
-      groupId = { year: { $year: "$dateReservation" }, month: { $month: "$dateReservation" } };
     }
 
-    // Pipeline d'agrégation
+    // Pipeline d'agrégation pour récupérer chaque transaction confirmée avec son revenu
     const aggregationPipeline = [
       { $match: matchConditions },
-      { $lookup: { from: "trajets", localField: "trajet", foreignField: "_id", as: "trajetInfo" } },
+      { 
+        $lookup: { 
+          from: "trajets", 
+          localField: "trajet", 
+          foreignField: "_id", 
+          as: "trajetInfo" 
+        } 
+      },
       { $unwind: "$trajetInfo" },
-      { $project: { // Calculer le revenu pour chaque réservation
+      { 
+        $project: {
           dateReservation: "$dateReservation",
           revenue: { $multiply: ["$trajetInfo.prix", "$placesReservees"] }
-      }}
+        }
+      }
     ];
 
-    // Exécuter l'agrégation
-    const results = await Reservation.aggregate(aggregationPipeline);
+    const transactions = await Reservation.aggregate(aggregationPipeline);
 
-    // --- NOUVELLE PARTIE : Calculer les statistiques globales ---
-    const totalRevenue = results.reduce((sum, item) => sum + item.revenue, 0);
-    const totalTransactions = results.length;
-    // -----------------------------------------------------------
-    
-    // --- NOUVELLE PARTIE : Regrouper les résultats pour le graphique ---
-    const groupedData = results.reduce((acc, item) => {
+    // Calculer les statistiques globales à partir des transactions
+    const totalRevenue = transactions.reduce((sum, item) => sum + item.revenue, 0);
+    const totalTransactions = transactions.length;
+
+    // Regrouper les données par jour ou par mois pour le graphique
+    const groupedForChart = transactions.reduce((acc, item) => {
+        const date = new Date(item.dateReservation);
         let key;
         if (periode === 'weekly') {
-            const date = new Date(item.dateReservation);
             key = `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}`;
         } else {
-            const date = new Date(item.dateReservation);
             key = `${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear()}`;
         }
         
         if (!acc[key]) {
-            acc[key] = 0;
+            acc[key] = { label: key, total: 0 };
         }
-        acc[key] += item.revenue;
+        acc[key].total += item.revenue;
         
         return acc;
     }, {});
 
-    const chartData = Object.keys(groupedData).map(key => ({
-        label: key,
-        total: groupedData[key]
-    })).sort((a,b) => new Date(a.label.split('/').reverse().join('-')) - new Date(b.label.split('/').reverse().join('-'))); // Trier par date
-    // -------------------------------------------------------------------
+    const chartData = Object.values(groupedForChart).sort((a,b) => {
+        const dateA = new Date(a.label.split('/').reverse().join('-'));
+        const dateB = new Date(b.label.split('/').reverse().join('-'));
+        return dateA - dateB;
+    });
 
-    // Renvoyer l'objet structuré
+    // Renvoyer un objet structuré au frontend
     return res.json({
       summary: {
         totalRevenue,
