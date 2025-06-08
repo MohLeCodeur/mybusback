@@ -20,25 +20,24 @@ exports.createReservationAndPay = async (req, res) => {
   session.startTransaction();
 
   try {
-    const { trajetId, passagers } = req.body;
-    const placesReservees = passagers.length;
+    const { trajetId, passagers, contactEmail, contactTelephone } = req.body;
+    
+    if (!contactEmail || !contactTelephone) {
+        throw new Error("L'email et le téléphone de contact sont requis.");
+    }
 
-    // req.user est fourni par le middleware `protect`
+    const placesReservees = passagers.length;
     if (!req.user) {
       return res.status(401).json({ message: 'Utilisateur non authentifié.' });
     }
     const clientId = req.user._id;
 
-    // 1. Vérifier le trajet et la disponibilité des places
     const trajet = await Trajet.findById(trajetId).session(session);
-    if (!trajet) {
-      throw new Error('Trajet non trouvé');
-    }
+    if (!trajet) throw new Error('Trajet non trouvé');
     if (trajet.placesDisponibles < placesReservees) {
-      throw new Error(`Seulement ${trajet.placesDisponibles} places sont disponibles pour ce trajet.`);
+      throw new Error(`Seulement ${trajet.placesDisponibles} places sont disponibles.`);
     }
 
-    // 2. Créer le document de réservation
     const reservation = new Reservation({
       trajet: trajetId,
       client: clientId,
@@ -48,15 +47,13 @@ exports.createReservationAndPay = async (req, res) => {
     });
     await reservation.save({ session });
 
-    // 3. Mettre à jour le nombre de places disponibles pour le trajet
     trajet.placesDisponibles -= placesReservees;
     await trajet.save({ session });
 
-    // 4. Préparer et initier la requête de paiement vers VitePay
     const order_id = reservation._id.toString();
     const montantFCFA = trajet.prix * placesReservees;
     const amount_100 = montantFCFA * 100;
-    const callback_url = `${process.env.BACKEND_URL || 'http://localhost:5000'}/api/vitepay/callback`;
+    const callback_url = `${process.env.BACKEND_URL}/api/vitepay/callback`; // Assurez-vous que BACKEND_URL est défini
     const return_url = `${process.env.FRONTEND_URL}/confirmation/${order_id}`;
     const decline_url = `${process.env.FRONTEND_URL}/payment-failed`;
     const cancel_url = `${process.env.FRONTEND_URL}/search`;
@@ -69,12 +66,14 @@ exports.createReservationAndPay = async (req, res) => {
         order_id,
         amount_100,
         currency_code: 'XOF',
+        // --- LIGNE AJOUTÉE ---
+        country_code: 'ML', // Code pays pour le Mali
+        // ---------------------
         description: `Réservation MyBus #${order_id}`,
-        return_url,
-        decline_url,
-        cancel_url,
-        callback_url,
-        email: req.user.email,
+        return_url, decline_url, cancel_url, callback_url,
+        email: contactEmail,
+        buyer_name: `${passagers[0].prenom} ${passagers[0].nom}`,
+        buyer_phone_number: contactTelephone,
         buyer_ip_adress: req.ip,
       },
       api_key: process.env.VITEPAY_API_KEY,
@@ -86,18 +85,14 @@ exports.createReservationAndPay = async (req, res) => {
     const vitepayResponse = await axios.post(VITEPAY_API, payload);
     const checkoutUrl = vitepayResponse.data.redirect_url || vitepayResponse.data;
 
-    if (!checkoutUrl) {
-      throw new Error("Impossible d'obtenir l'URL de paiement de VitePay.");
-    }
+    if (!checkoutUrl) throw new Error("URL de paiement non reçue de VitePay.");
     
-    // Si tout réussit, on valide la transaction
     await session.commitTransaction();
     res.status(201).json({ reservationId: order_id, checkoutUrl });
 
   } catch (err) {
-    // En cas d'erreur, on annule tout ce qui a été fait
     await session.abortTransaction();
-    console.error('Erreur createReservationAndPay:', err.response?.data || err.message);
+    console.error('Erreur createReservationAndPay:', err.response?.data?.message || err.message, err.stack);
     res.status(400).json({ message: err.message });
   } finally {
     session.endSession();
