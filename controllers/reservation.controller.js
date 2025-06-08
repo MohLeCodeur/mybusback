@@ -136,13 +136,32 @@ exports.createReservationAndPay = async (req, res) => {
 // ...
 exports.getReservationByIdPublic = async (req, res) => {
     try {
-        const reservation = await Reservation.findById(req.params.id).populate('trajet').populate('client', 'nom prenom email');
-        if (!reservation) { return res.status(404).json({ message: "Réservation non trouvée" }); }
-        if (reservation.client._id.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
-            return res.status(403).json({ message: "Accès non autorisé." });
+        // --- VÉRIFIEZ ET CORRIGEZ CETTE PARTIE ---
+        const reservation = await Reservation.findById(req.params.id)
+            .populate('client', 'nom prenom email') // Peuple le client
+            .populate({
+                path: 'trajet', // Peuple le trajet...
+                populate: {
+                    path: 'bus', // ...et à l'intérieur, peuple le bus
+                    model: 'Bus'
+                }
+            });
+        // ------------------------------------------
+
+        if (!reservation) {
+            return res.status(404).json({ message: "Réservation non trouvée" });
         }
+        
+        // Vérification de sécurité
+        if (reservation.client._id.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+            return res.status(403).json({ message: "Accès non autorisé à cette réservation." });
+        }
+        
         res.json(reservation);
-    } catch (err) { res.status(500).json({ message: err.message }); }
+    } catch (err) {
+        console.error("Erreur getReservationByIdPublic:", err);
+        res.status(500).json({ message: err.message });
+    }
 };
 
 exports.getAllReservationsAdmin = async (req, res) => {
