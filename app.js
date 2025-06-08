@@ -51,6 +51,7 @@ app.use('/api/admin/trajets', require('./routes/admin/trajet.routes'));
 app.use('/api/admin/reservations', require('./routes/admin/reservation.routes'));
 app.use('/api/admin/colis', require('./routes/admin/colis.routes'));
 app.use('/api/admin/stats', require('./routes/admin/stats.routes'));
+app.use('/api/admin/paiements', require('./routes/admin/paiement.routes.js'));
 app.use('/api/admin/villes', require('./routes/admin/ville.routes'));
 
 
