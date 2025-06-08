@@ -43,7 +43,7 @@ app.use('/api/public/colis', require('./routes/public/colis.routes'));
 // 3. Routes Protégées pour les clients connectés (réservation)
 app.use('/api/reservations', require('./routes/reservation.routes'));
 app.use('/api/payments/vitepay', require('./routes/vitepay.routes'));
-
+app.use('/api/tracking', require('./routes/tracking.routes.js'));
 // 4. Routes Administratives (toutes préfixées par /api/admin)
 app.use('/api/admin/bus', require('./routes/admin/bus.routes'));
 app.use('/api/admin/chauffeurs', require('./routes/admin/chauffeur.routes'));
