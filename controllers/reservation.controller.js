@@ -187,5 +187,59 @@ exports.getAllReservationsAdmin = async (req, res) => {
   }
 };
 
-exports.updateReservationAdmin = async (req, res) => { /* ... */ };
+exports.updateReservationAdmin = async (req, res) => {
+  try {
+    // On ne met à jour que les champs fournis dans le body
+    const { statut } = req.body;
+    if (!statut) {
+        return res.status(400).json({ message: "Aucun statut fourni pour la mise à jour." });
+    }
+
+    const reservation = await Reservation.findByIdAndUpdate(
+      req.params.id, 
+      { statut: statut }, // On s'assure de ne changer que le statut
+      { new: true, runValidators: true }
+    );
+
+    if (!reservation) {
+      return res.status(404).json({ message: "Réservation non trouvée" });
+    }
+    
+    console.log(`Réservation ${reservation._id} mise à jour manuellement au statut: ${reservation.statut}`);
+    res.json(reservation);
+
+  } catch (err) {
+    console.error("Erreur updateReservationAdmin:", err);
+    res.status(500).json({ message: err.message });
+  }
+};
+exports.confirmReservationManually = async (req, res) => {
+    try {
+        const reservation = await Reservation.findById(req.params.id);
+        if (!reservation) {
+            return res.status(404).json({ message: "Réservation non trouvée" });
+        }
+
+        // Si la réservation est déjà confirmée, on ne fait rien
+        if (reservation.statut === 'confirmée') {
+            return res.status(400).json({ message: "Cette réservation est déjà confirmée." });
+        }
+
+        reservation.statut = 'confirmée';
+        await reservation.save();
+        
+        // C'est ici que vous ajouteriez la logique pour mettre à jour les statistiques.
+        // Pour l'instant, les statistiques sont calculées à la volée, donc le simple
+        // fait de changer le statut est suffisant. Si vous aviez une collection
+        // 'revenus_mensuels', vous l'incrémenteriez ici.
+
+        console.log(`Réservation ${reservation._id} confirmée manuellement par un admin.`);
+        res.json({ message: "Réservation confirmée avec succès.", reservation });
+
+    } catch (err) {
+        console.error("Erreur confirmReservationManually:", err);
+        res.status(500).json({ message: err.message });
+    }
+};
+
 exports.deleteReservationAdmin = async (req, res) => { /* ... */ };
