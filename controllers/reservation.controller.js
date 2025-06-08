@@ -147,9 +147,25 @@ exports.getReservationByIdPublic = async (req, res) => {
 
 exports.getAllReservationsAdmin = async (req, res) => {
   try {
-    const list = await Reservation.findById(req.params.id).populate({ path: 'trajet', populate: { path: 'bus', model: 'Bus' } }).sort({ dateReservation: -1 });
+    // --- LIGNE CORRIGÉE ---
+    // On utilise find() pour obtenir toutes les réservations, pas findById().
+    const list = await Reservation.find({}) 
+      .populate('client', 'prenom nom email')
+      .populate({
+        path: 'trajet',
+        populate: {
+          path: 'bus',
+          model: 'Bus'
+        }
+      })
+      .sort({ dateReservation: -1 });
+    // -----------------------
+
     res.json(list);
-  } catch (err) { console.error("Erreur getAllReservationsAdmin:", err); res.status(500).json({ message: err.message }); }
+  } catch (err) {
+    console.error("Erreur getAllReservationsAdmin:", err);
+    res.status(500).json({ message: err.message });
+  }
 };
 
 exports.updateReservationAdmin = async (req, res) => { /* ... */ };
