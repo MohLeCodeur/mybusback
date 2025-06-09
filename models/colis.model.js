@@ -32,6 +32,7 @@ const colisSchema = new mongoose.Schema({
   code_suivi: { type: String, unique: true },
   expediteur_nom: { type: String, required: true },
   expediteur_telephone: { type: String, required: true },
+  expediteur_email: { type: String, index: true },
   destinataire_nom: { type: String, required: true },
   destinataire_telephone: { type: String, required: true },
   date_enregistrement: { type: Date, default: Date.now },

@@ -35,7 +35,7 @@ app.use(limiter);
 
 // 1. Routes d'Authentification (publiques)
 app.use('/api/auth', require('./routes/auth.routes'));
-
+app.use('/api/dashboard', require('./routes/dashboard.routes.js'));
 // 2. Routes Publiques (recherche, suivi...)
 app.use('/api/public/trajets', require('./routes/public/trajet.routes'));
 app.use('/api/public/colis', require('./routes/public/colis.routes'));
