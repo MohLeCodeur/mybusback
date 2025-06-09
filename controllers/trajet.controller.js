@@ -2,33 +2,49 @@
 const Trajet = require('../models/trajet.model');
 
 /**
- * @desc    Rechercher des trajets - VERSION DE TEST 1
+ * @desc    Rechercher des trajets pour l'interface publique (avec filtres et pagination)
  * @route   GET /api/public/trajets/search
  * @access  Public
  */
 exports.searchTrajets = async (req, res) => {
   try {
-    // --- TEST 1 : ON IGNORE TOUS LES FILTRES POUR VOIR SI DES DONNÉES EXISTENT ---
-    let queryFilter = {}; // Le filtre est complètement vide.
-    // --------------------------------------------------------------------------
-    
-    console.log("--- DÉBUT DU TEST 1 ---");
-    console.log("Filtre MongoDB appliqué (vide pour test) :", JSON.stringify(queryFilter));
+    const { villeDepart, villeArrivee, date, limit = 15, page = 1 } = req.query;
 
-    const { limit = 15, page = 1 } = req.query;
+    // --- FILTRE FINAL ET COMPLET ---
+    let queryFilter = { isActive: true }; // On ne cherche que les trajets qui sont marqués comme actifs
+
+    if (villeDepart) {
+      queryFilter.villeDepart = { $regex: villeDepart, $options: 'i' };
+    }
+    if (villeArrivee) {
+      queryFilter.villeArrivee = { $regex: villeArrivee, $options: 'i' };
+    }
+
+    // Logique de date robuste
+    if (date) {
+      const startDate = new Date(`${date}T00:00:00.000Z`);
+      const endDate = new Date(`${date}T23:59:59.999Z`);
+      queryFilter.dateDepart = { $gte: startDate, $lte: endDate };
+    } else {
+      const today = new Date();
+      today.setUTCHours(0, 0, 0, 0); 
+      queryFilter.dateDepart = { $gte: today };
+    }
+    // -----------------------------
+
+    console.log("Filtre de production appliqué :", JSON.stringify(queryFilter));
+
     const skip = (parseInt(page) - 1) * parseInt(limit);
-    
     const [docs, total] = await Promise.all([
       Trajet.find(queryFilter)
         .populate('bus', 'numero capacite etat')
-        .sort({ dateDepart: 1 }) // On garde le tri pour la cohérence
+        .sort({ dateDepart: 1 })
         .skip(skip)
         .limit(parseInt(limit)),
       Trajet.countDocuments(queryFilter)
     ]);
     
-    console.log(`RÉSULTAT DU TEST 1 : ${total} trajet(s) trouvé(s) au total, ${docs.length} renvoyé(s) pour la page ${page}.`);
-    console.log("--- FIN DU TEST 1 ---");
+    console.log(`Recherche terminée. ${total} trajet(s) trouvé(s) avec les filtres.`);
 
     res.json({
       docs,
@@ -38,7 +54,7 @@ exports.searchTrajets = async (req, res) => {
     });
 
   } catch (err) {
-    console.error("Erreur [searchTrajets - TEST 1]:", err);
+    console.error("Erreur [searchTrajets]:", err);
     res.status(500).json({ message: "Erreur serveur lors de la recherche des trajets." });
   }
 };
