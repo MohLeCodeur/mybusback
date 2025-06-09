@@ -144,16 +144,19 @@ exports.getLiveTripById = async (req, res) => {
             return res.status(404).json({ message: "Voyage en direct non trouvé." });
         }
 
-        // Optionnel : Vérification de sécurité pour s'assurer que le client a bien une réservation pour ce trajet
+        // --- CORRECTION DE LA VÉRIFICATION DE SÉCURITÉ ---
+        // On vérifie que le client connecté a bien une réservation pour le trajet associé à ce LiveTrip
         const hasReservation = await Reservation.findOne({
             client: req.user._id,
-            trajetId: liveTrip.trajetId,
+            trajet: liveTrip.trajetId, // Le champ dans le modèle Reservation s'appelle 'trajet'
             statut: 'confirmée'
         });
 
+        // Si l'utilisateur n'a pas de réservation pour ce trajet ET n'est pas un admin, on refuse l'accès
         if (!hasReservation && req.user.role !== 'admin') {
             return res.status(403).json({ message: "Accès non autorisé à ce suivi." });
         }
+        // ----------------------------------------------------
 
         res.json(liveTrip);
     } catch (err) {
