@@ -4,7 +4,7 @@ const axios = require('axios');
 const Reservation = require('../models/reservation.model');
 const LiveTrip = require('../models/LiveTrip.model');
 const Trajet = require('../models/trajet.model');
-
+const { getDistance } = require('geolib');
 /**
  * @desc    Fonction utilitaire pour calculer l'itinéraire via OpenRouteService
  * @param   {object} startCoords - Coordonnées de départ { lat, lng }
@@ -228,39 +228,58 @@ exports.getMyNextTrip = async (req, res) => {
 exports.getLiveTripById = async (req, res) => {
     try {
         const { liveTripId } = req.params;
-        const liveTrip = await LiveTrip.findById(liveTripId).populate('busId', 'numero').populate('trajetId');
-        if (!liveTrip) return res.status(404).json({ message: "Voyage en direct non trouvé." });
+        const liveTrip = await LiveTrip.findById(liveTripId)
+            .populate('busId', 'numero')
+            .populate('trajetId'); // On peuple l'objet trajet entier
 
-        // ... (Vérification de sécurité)
+        if (!liveTrip) {
+            return res.status(404).json({ message: "Voyage en direct non trouvé." });
+        }
+
+        // --- VÉRIFICATION DE SÉCURITÉ ROBUSTE ---
+        // On s'assure que liveTrip.trajetId existe avant de l'utiliser
+        if (!liveTrip.trajetId) {
+             return res.status(404).json({ message: "Le trajet associé à ce suivi est introuvable." });
+        }
+        
+        const hasReservation = await Reservation.findOne({
+            client: req.user._id,
+            trajet: liveTrip.trajetId._id, // On utilise bien l'ID
+            statut: 'confirmée'
+        });
+
+        if (!hasReservation && req.user.role !== 'admin') {
+            return res.status(403).json({ message: "Accès non autorisé à ce suivi." });
+        }
+        // ------------------------------------
 
         let tripData = liveTrip.toObject();
-        
-        // --- NOUVEAU : Calcul de la progression ---
-        if (liveTrip.currentPosition && liveTrip.trajetId.coordsArrivee && liveTrip.routeSummary?.distanceKm) {
-            // Distance restante en mètres
+        let eta = null;
+
+        // Calcul de la progression et de l'ETA
+        if (tripData.currentPosition && tripData.trajetId?.coordsArrivee && tripData.routeSummary?.distanceKm) {
             const remainingDistanceMeters = getDistance(
-                { latitude: liveTrip.currentPosition.lat, longitude: liveTrip.currentPosition.lng },
-                { latitude: liveTrip.trajetId.coordsArrivee.lat, longitude: liveTrip.trajetId.coordsArrivee.lng }
+                { latitude: tripData.currentPosition.lat, longitude: tripData.currentPosition.lng },
+                { latitude: tripData.trajetId.coordsArrivee.lat, longitude: tripData.trajetId.coordsArrivee.lng }
             );
             const remainingDistanceKm = remainingDistanceMeters / 1000;
-            const totalDistanceKm = parseFloat(liveTrip.routeSummary.distanceKm);
-            
-            // Calcul du pourcentage de progression
+            const totalDistanceKm = parseFloat(tripData.routeSummary.distanceKm);
             const progressPercentage = Math.min(100, Math.max(0, ((totalDistanceKm - remainingDistanceKm) / totalDistanceKm) * 100));
 
             tripData.progress = {
                 percentage: progressPercentage.toFixed(0),
                 remainingKm: remainingDistanceKm.toFixed(1)
             };
+            
+            // Calcul ETA plus précis
+            if (tripData.routeSummary.durationMin > 0) {
+                const remainingDurationMin = tripData.routeSummary.durationMin * (remainingDistanceKm / totalDistanceKm);
+                const arrivalTimestamp = new Date().getTime() + (remainingDurationMin * 60 * 1000);
+                eta = new Date(arrivalTimestamp);
+            }
         }
-        // ------------------------------------
-
-        // Calcul de l'ETA
-        if (liveTrip.routeSummary?.durationMin) {
-            const departureTime = new Date(liveTrip.departureDateTime).getTime();
-            const arrivalTimestamp = departureTime + (liveTrip.routeSummary.durationMin * 60 * 1000);
-            tripData.eta = new Date(arrivalTimestamp);
-        }
+        
+        tripData.eta = eta;
         
         res.json(tripData);
 
