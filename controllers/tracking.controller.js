@@ -149,22 +149,71 @@ exports.updateBusPosition = async (req, res) => {
 exports.getMyNextTrip = async (req, res) => {
     try {
         const now = new Date();
-        const allConfirmedReservations = await Reservation.find({ client: req.user._id, statut: 'confirmée' }).populate('trajet');
-        if (!allConfirmedReservations.length) return res.json({ message: "Vous n'avez aucune réservation confirmée." });
+        const clientId = req.user._id;
 
-        const futureReservations = allConfirmedReservations.filter(r => {
-            if (!r.trajet) return false;
-            const departureDateTime = new Date(`${new Date(r.trajet.dateDepart).toISOString().split('T')[0]}T${r.trajet.heureDepart}:00`);
-            return departureDateTime >= now;
-        });
+        // 1. Trouver la réservation confirmée la plus proche dans le futur
+        const allReservations = await Reservation.find({ client: clientId, statut: 'confirmée' }).populate('trajet');
+        
+        const futureReservations = allReservations
+            .filter(r => {
+                if (!r.trajet) return false;
+                const departureDateTime = new Date(`${new Date(r.trajet.dateDepart).toISOString().split('T')[0]}T${r.trajet.heureDepart}:00`);
+                return departureDateTime >= now;
+            })
+            .sort((a, b) => new Date(a.trajet.dateDepart) - new Date(b.trajet.dateDepart));
 
-        if (!futureReservations.length) return res.json({ message: "Vous n'avez aucun voyage à venir." });
+        if (futureReservations.length > 0) {
+            // Un voyage est encore à venir, on renvoie les infos avec le compte à rebours
+            const nextReservation = futureReservations[0];
+            const liveTrip = await LiveTrip.findOne({ trajetId: nextReservation.trajet._id });
+            return res.json({ reservation: nextReservation, liveTrip: liveTrip || null });
+        }
+        
+        // 2. Si aucun voyage futur, trouver le voyage le plus récent qui est parti
+        const pastReservations = allReservations
+            .filter(r => {
+                if (!r.trajet) return false;
+                const departureDateTime = new Date(`${new Date(r.trajet.dateDepart).toISOString().split('T')[0]}T${r.trajet.heureDepart}:00`);
+                // On vérifie s'il est parti il y a moins de 12 heures (par exemple)
+                const hoursSinceDeparture = (now - departureDateTime) / (1000 * 60 * 60);
+                return hoursSinceDeparture >= 0 && hoursSinceDeparture < 12; 
+            })
+            .sort((a, b) => new Date(b.trajet.dateDepart) - new Date(a.trajet.dateDepart));
+            
+        if (pastReservations.length > 0) {
+            // C'est le voyage en cours ou qui vient de partir !
+            const currentReservation = pastReservations[0];
+            const trajet = await Trajet.findById(currentReservation.trajet._id);
 
-        futureReservations.sort((a, b) => new Date(a.trajet.dateDepart) - new Date(b.trajet.dateDepart));
-        const nextReservation = futureReservations[0];
-        const liveTrip = await LiveTrip.findOne({ trajetId: nextReservation.trajet._id });
+            if (!trajet.coordsDepart?.lat || !trajet.coordsArrivee?.lat) {
+                return res.json({ reservation: currentReservation, liveTrip: null, message: "Suivi non disponible pour ce trajet (coordonnées manquantes)." });
+            }
 
-        res.json({ reservation: nextReservation, liveTrip: liveTrip || null });
+            // On cherche ou on crée le LiveTrip automatiquement
+            let liveTrip = await LiveTrip.findOne({ trajetId: trajet._id });
+            if (!liveTrip) {
+                console.log(`Création automatique du LiveTrip pour le trajet ${trajet._id}`);
+                const routeData = await calculateORS_Route(trajet.coordsDepart, trajet.coordsArrivee);
+                liveTrip = new LiveTrip({
+                    trajetId: trajet._id, busId: trajet.bus,
+                    originCityName: trajet.villeDepart, destinationCityName: trajet.villeArrivee,
+                    departureDateTime: trajet.dateDepart, status: 'En cours',
+                    routeGeoJSON: routeData.geojson, routeInstructions: routeData.instructions,
+                    routeSummary: routeData.summary, currentPosition: trajet.coordsDepart
+                });
+            } else if (liveTrip.status !== 'Terminé') {
+                liveTrip.status = 'En cours';
+            }
+            
+            liveTrip.lastUpdated = new Date();
+            await liveTrip.save();
+
+            return res.json({ reservation: currentReservation, liveTrip });
+        }
+        
+        // Si aucun voyage futur ni récent n'est trouvé
+        return res.json({ message: "Vous n'avez aucun voyage récent ou à venir." });
+
     } catch (err) {
         console.error("Erreur getMyNextTrip:", err);
         res.status(500).json({ message: err.message });
