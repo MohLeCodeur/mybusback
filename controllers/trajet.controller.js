@@ -8,19 +8,13 @@ const Trajet = require('../models/trajet.model');
  */
 exports.searchTrajets = async (req, res) => {
   try {
-    const { villeDepart, villeArrivee, date, limit = 15, page = 1 } = req.query;
+    const { villeDepart, villeArrivee, date, compagnie, sortBy = 'date', limit = 6, page = 1 } = req.query;
 
-    // --- FILTRE FINAL ET COMPLET ---
-    let queryFilter = { isActive: true }; // On ne cherche que les trajets qui sont marqués comme actifs
+    let queryFilter = { isActive: true };
+    if (villeDepart) queryFilter.villeDepart = { $regex: villeDepart, $options: 'i' };
+    if (villeArrivee) queryFilter.villeArrivee = { $regex: villeArrivee, $options: 'i' };
+    if (compagnie) queryFilter.compagnie = { $regex: compagnie, $options: 'i' };
 
-    if (villeDepart) {
-      queryFilter.villeDepart = { $regex: villeDepart, $options: 'i' };
-    }
-    if (villeArrivee) {
-      queryFilter.villeArrivee = { $regex: villeArrivee, $options: 'i' };
-    }
-
-    // Logique de date robuste
     if (date) {
       const startDate = new Date(`${date}T00:00:00.000Z`);
       const endDate = new Date(`${date}T23:59:59.999Z`);
@@ -30,35 +24,41 @@ exports.searchTrajets = async (req, res) => {
       today.setUTCHours(0, 0, 0, 0); 
       queryFilter.dateDepart = { $gte: today };
     }
-    // -----------------------------
 
-    console.log("Filtre de production appliqué :", JSON.stringify(queryFilter));
+    // --- NOUVELLE LOGIQUE DE TRI ---
+    let sortOptions = {};
+    if (sortBy === 'price_asc') sortOptions.prix = 1;
+    else if (sortBy === 'price_desc') sortOptions.prix = -1;
+    else sortOptions.dateDepart = 1; // Tri par défaut
+    // ----------------------------
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const [docs, total] = await Promise.all([
       Trajet.find(queryFilter)
-        .populate('bus', 'numero capacite etat')
-        .sort({ dateDepart: 1 })
+        .populate('bus', 'numero')
+        .sort(sortOptions)
         .skip(skip)
         .limit(parseInt(limit)),
       Trajet.countDocuments(queryFilter)
     ]);
     
-    console.log(`Recherche terminée. ${total} trajet(s) trouvé(s) avec les filtres.`);
+    // Récupérer toutes les villes et compagnies pour les filtres
+    const allCities = await Trajet.distinct('villeDepart');
+    const allCompanies = await Trajet.distinct('compagnie');
 
     res.json({
       docs,
       total,
       page: parseInt(page),
-      pages: Math.ceil(total / parseInt(limit))
+      pages: Math.ceil(total / parseInt(limit)),
+      meta: { allCities, allCompanies } // On envoie les métadonnées pour les filtres
     });
 
   } catch (err) {
     console.error("Erreur [searchTrajets]:", err);
-    res.status(500).json({ message: "Erreur serveur lors de la recherche des trajets." });
+    res.status(500).json({ message: "Erreur serveur lors de la recherche." });
   }
 };
-
 
 // ==============================================================
 // Les autres fonctions restent inchangées
