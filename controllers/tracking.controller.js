@@ -129,3 +129,35 @@ exports.getMyNextTrip = async (req, res) => {
         res.status(500).json({ message: err.message });
     }
 };
+
+/**
+ * @desc    Récupérer les détails d'un voyage en cours par son ID
+ * @route   GET /api/tracking/live/:liveTripId
+ * @access  Privé (client connecté)
+ */
+exports.getLiveTripById = async (req, res) => {
+    try {
+        const { liveTripId } = req.params;
+        const liveTrip = await LiveTrip.findById(liveTripId);
+
+        if (!liveTrip) {
+            return res.status(404).json({ message: "Voyage en direct non trouvé." });
+        }
+
+        // Optionnel : Vérification de sécurité pour s'assurer que le client a bien une réservation pour ce trajet
+        const hasReservation = await Reservation.findOne({
+            client: req.user._id,
+            trajetId: liveTrip.trajetId,
+            statut: 'confirmée'
+        });
+
+        if (!hasReservation && req.user.role !== 'admin') {
+            return res.status(403).json({ message: "Accès non autorisé à ce suivi." });
+        }
+
+        res.json(liveTrip);
+    } catch (err) {
+        console.error("Erreur getLiveTripById:", err);
+        res.status(500).json({ message: "Erreur serveur." });
+    }
+};
