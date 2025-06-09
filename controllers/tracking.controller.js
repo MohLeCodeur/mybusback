@@ -52,53 +52,65 @@ async function calculateORS_Route(startCoords, endCoords) {
  */
 exports.startTrip = async (req, res) => {
     try {
+        console.log("--- DÉBUT DE startTrip ---");
         const { trajetId } = req.body;
         const trajet = await Trajet.findById(trajetId).populate('bus');
-        if (!trajet) return res.status(404).json({ message: "Trajet non trouvé" });
-        if (!trajet.bus) return res.status(400).json({ message: "Aucun bus n'est assigné." });
+
+        if (!trajet) {
+            console.log("Erreur : Trajet non trouvé pour l'ID:", trajetId);
+            return res.status(404).json({ message: "Trajet non trouvé" });
+        }
         if (!trajet.coordsDepart?.lat || !trajet.coordsArrivee?.lat) {
+            console.log("Erreur : Coordonnées GPS manquantes pour le trajet:", trajetId);
             return res.status(400).json({ message: "Coordonnées GPS manquantes pour ce trajet." });
         }
 
-        // --- LOGIQUE CORRIGÉE ET ROBUSTE ---
         let liveTrip = await LiveTrip.findOne({ trajetId });
 
-        if (!liveTrip) {
-            // Si le LiveTrip n'existe pas du tout, on le crée avec l'itinéraire
-            console.log(`LiveTrip pour le trajet ${trajetId} non trouvé. Création...`);
-            const routeData = await calculateORS_Route(trajet.coordsDepart, trajet.coordsArrivee);
-            
-            liveTrip = new LiveTrip({
-                trajetId: trajet._id, busId: trajet.bus._id,
-                originCityName: trajet.villeDepart, destinationCityName: trajet.villeArrivee,
-                departureDateTime: trajet.dateDepart,
-                routeGeoJSON: routeData.geojson,
-                routeInstructions: routeData.instructions,
-                routeSummary: routeData.summary,
-                currentPosition: trajet.coordsDepart // Position initiale
-            });
-        } 
-        // On vérifie si l'itinéraire est manquant, même si le LiveTrip existe
-        else if (!liveTrip.routeGeoJSON || !liveTrip.routeSummary) {
-            console.log(`LiveTrip trouvé, mais l'itinéraire est manquant. Calcul...`);
-            const routeData = await calculateORS_Route(trajet.coordsDepart, trajet.coordsArrivee);
-            liveTrip.routeGeoJSON = routeData.geojson;
-            liveTrip.routeInstructions = routeData.instructions;
-            liveTrip.routeSummary = routeData.summary;
-            liveTrip.currentPosition = trajet.coordsDepart;
-        }
+        // --- SECTION DE DÉBOGAGE ---
+        if (!liveTrip || !liveTrip.routeGeoJSON) {
+            console.log("Itinéraire manquant ou LiveTrip inexistant. Tentative de calcul de l'itinéraire...");
+            try {
+                const routeData = await calculateORS_Route(trajet.coordsDepart, trajet.coordsArrivee);
+                console.log("SUCCÈS : Itinéraire calculé par OpenRouteService.");
 
-        // Dans tous les cas, on s'assure que le statut est "En cours" et on met à jour l'heure
+                if (!liveTrip) {
+                    console.log("Création d'un nouveau document LiveTrip.");
+                    liveTrip = new LiveTrip({
+                        trajetId: trajet._id, busId: trajet.bus._id,
+                        originCityName: trajet.villeDepart, destinationCityName: trajet.villeArrivee,
+                        departureDateTime: trajet.dateDepart,
+                        routeGeoJSON: routeData.geojson,
+                        routeInstructions: routeData.instructions,
+                        routeSummary: routeData.summary,
+                        currentPosition: trajet.coordsDepart
+                    });
+                } else {
+                    console.log("Mise à jour du LiveTrip existant avec les données de l'itinéraire.");
+                    liveTrip.routeGeoJSON = routeData.geojson;
+                    liveTrip.routeInstructions = routeData.instructions;
+                    liveTrip.routeSummary = routeData.summary;
+                    liveTrip.currentPosition = trajet.coordsDepart;
+                }
+            } catch (orsError) {
+                console.error("--- ERREUR CRITIQUE DANS calculateORS_Route ---");
+                console.error("Message d'erreur ORS:", orsError.response?.data || orsError.message);
+                console.error("-------------------------------------------");
+                // On continue sans les données de l'itinéraire pour ne pas bloquer
+            }
+        }
+        // -----------------------------
+
         liveTrip.status = 'En cours';
         liveTrip.lastUpdated = new Date();
         
         await liveTrip.save();
-        console.log(`Voyage pour le trajet ${trajetId} démarré/mis à jour avec succès.`);
+        console.log(`Sauvegarde du LiveTrip réussie. Statut: ${liveTrip.status}, Itinéraire présent: ${!!liveTrip.routeGeoJSON}`);
         res.status(200).json({ message: "Le voyage a démarré.", liveTrip });
 
     } catch (err) {
-        console.error("Erreur startTrip:", err.response?.data || err.message);
-        res.status(500).json({ message: err.response?.data?.error?.message || err.message || "Erreur interne du serveur." });
+        console.error("Erreur générale dans startTrip:", err);
+        res.status(500).json({ message: err.message });
     }
 };
 
