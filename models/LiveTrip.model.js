@@ -7,28 +7,24 @@ const pointSchema = new mongoose.Schema({
 }, { _id: false });
 
 const liveTripSchema = new mongoose.Schema({
-  // Référence à notre modèle Trajet existant
   trajetId: { type: mongoose.Schema.Types.ObjectId, ref: 'Trajet', required: true, unique: true },
   busId: { type: mongoose.Schema.Types.ObjectId, ref: 'Bus', required: true },
-
-  // Informations copiées depuis le Trajet pour un accès rapide
+  
   originCityName: { type: String, required: true },
   destinationCityName: { type: String, required: true },
   departureDateTime: { type: Date, required: true },
   
-  // Statut du voyage en temps réel
-  status: { 
-    type: String, 
-    enum: ['À venir', 'En cours', 'Terminé', 'Annulé'], 
-    default: 'À venir' 
-  },
-  
-  // Position actuelle du bus
+  status: { type: String, enum: ['À venir', 'En cours', 'Terminé', 'Annulé'], default: 'À venir' },
   currentPosition: { type: pointSchema },
   
-  // Chemin complet de l'itinéraire (peut être stocké ici)
+  // --- CHAMPS POUR L'ITINÉRAIRE CALCULÉ ---
   routeGeoJSON: { type: Object },
-
+  routeInstructions: [ { instruction: String } ],
+  routeSummary: {
+      distanceKm: Number,
+      durationMin: Number
+  },
+  // ----------------------------------------
   lastUpdated: { type: Date }
 }, { timestamps: true });
 
