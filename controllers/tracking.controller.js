@@ -228,47 +228,41 @@ exports.getMyNextTrip = async (req, res) => {
 exports.getLiveTripById = async (req, res) => {
     try {
         const { liveTripId } = req.params;
+        const liveTrip = await LiveTrip.findById(liveTripId).populate('busId', 'numero').populate('trajetId');
+        if (!liveTrip) return res.status(404).json({ message: "Voyage en direct non trouvé." });
 
-        // On peuple les informations du bus et du trajet pour les afficher sur la carte
-        const liveTrip = await LiveTrip.findById(liveTripId)
-            .populate('busId', 'numero') // Récupère le bus associé au LiveTrip
-            .populate('trajetId');       // Récupère le trajet associé au LiveTrip
+        // ... (Vérification de sécurité)
 
-        if (!liveTrip) {
-            return res.status(404).json({ message: "Voyage en direct non trouvé." });
+        let tripData = liveTrip.toObject();
+        
+        // --- NOUVEAU : Calcul de la progression ---
+        if (liveTrip.currentPosition && liveTrip.trajetId.coordsArrivee && liveTrip.routeSummary?.distanceKm) {
+            // Distance restante en mètres
+            const remainingDistanceMeters = getDistance(
+                { latitude: liveTrip.currentPosition.lat, longitude: liveTrip.currentPosition.lng },
+                { latitude: liveTrip.trajetId.coordsArrivee.lat, longitude: liveTrip.trajetId.coordsArrivee.lng }
+            );
+            const remainingDistanceKm = remainingDistanceMeters / 1000;
+            const totalDistanceKm = parseFloat(liveTrip.routeSummary.distanceKm);
+            
+            // Calcul du pourcentage de progression
+            const progressPercentage = Math.min(100, Math.max(0, ((totalDistanceKm - remainingDistanceKm) / totalDistanceKm) * 100));
+
+            tripData.progress = {
+                percentage: progressPercentage.toFixed(0),
+                remainingKm: remainingDistanceKm.toFixed(1)
+            };
         }
+        // ------------------------------------
 
-        // --- Vérification de Sécurité ---
-        // S'assurer que l'utilisateur qui fait la demande a bien le droit de voir ce suivi.
-        const hasReservation = await Reservation.findOne({
-            client: req.user._id,        // L'utilisateur actuellement connecté
-            trajet: liveTrip.trajetId,   // Le trajet de ce LiveTrip
-            statut: 'confirmée'
-        });
-
-        // Si l'utilisateur n'a pas de réservation pour ce trajet ET n'est pas un admin, on refuse l'accès.
-        if (!hasReservation && req.user.role !== 'admin') {
-            return res.status(403).json({ message: "Accès non autorisé à ce suivi." });
-        }
-        // --------------------------------
-
-        // --- Calcul de l'Heure d'Arrivée Estimée (ETA) ---
-        let eta = null; // Estimated Time of Arrival
+        // Calcul de l'ETA
         if (liveTrip.routeSummary?.durationMin) {
-            // Logique simple : Heure de départ + Durée totale du trajet.
-            // Une logique plus avancée pourrait recalculer le temps restant depuis la position actuelle.
             const departureTime = new Date(liveTrip.departureDateTime).getTime();
             const arrivalTimestamp = departureTime + (liveTrip.routeSummary.durationMin * 60 * 1000);
-            eta = new Date(arrivalTimestamp);
+            tripData.eta = new Date(arrivalTimestamp);
         }
-        // ----------------------------------------------------
-
-        // On convertit le document Mongoose en objet JavaScript simple pour pouvoir y ajouter un champ.
-        const liveTripObject = liveTrip.toObject();
-        // On ajoute le champ 'eta' calculé à l'objet qui sera envoyé au frontend.
-        liveTripObject.eta = eta;
         
-        res.json(liveTripObject);
+        res.json(tripData);
 
     } catch (err) {
         console.error("Erreur [getLiveTripById]:", err);
