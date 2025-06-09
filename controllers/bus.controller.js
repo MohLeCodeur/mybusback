@@ -1,62 +1,113 @@
 // backend/controllers/bus.controller.js
 const Bus = require("../models/bus.model");
-const Trajet = require("../models/trajet.model");
-const Reservation = require("../models/reservation.model");
+const mongoose = require('mongoose'); // Important pour les opérations avancées
 
-// GET /api/admin/bus
+/**
+ * @desc    Récupérer tous les bus avec leurs statistiques d'occupation et leur prochain trajet.
+ *          Utilise une agrégation MongoDB pour des performances optimales.
+ * @route   GET /api/admin/bus
+ * @access  Admin
+ */
 exports.getBuses = async (req, res) => {
   try {
-    // 1. Récupérer tous les bus
-    const buses = await Bus.find({}).lean(); // .lean() pour un objet JS simple, plus rapide
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0); // Début de la journée actuelle en UTC pour une comparaison juste
 
-    // 2. Pour chaque bus, calculer les places réservées et trouver le prochain trajet
-    const busesWithStats = await Promise.all(
-      buses.map(async (bus) => {
-        // Trouver tous les trajets futurs pour ce bus
-        const trajetsFuturs = await Trajet.find({ 
-          bus: bus._id,
-          dateDepart: { $gte: new Date() } // Uniquement les trajets à partir d'aujourd'hui
-        }).sort({ dateDepart: 1 });
-
-        let totalPlacesReservees = 0;
-        let prochainTrajet = null;
-
-        if (trajetsFuturs.length > 0) {
-            prochainTrajet = {
-                destination: `${trajetsFuturs[0].villeDepart} → ${trajetsFuturs[0].villeArrivee}`,
-                date: trajetsFuturs[0].dateDepart,
-            };
-
-            // Pour chaque trajet futur, trouver le nombre de places réservées
-            const reservations = await Reservation.find({
-                trajet: { $in: trajetsFuturs.map(t => t._id) },
-                statut: 'confirmée' // On ne compte que les réservations confirmées
-            });
-
-            totalPlacesReservees = reservations.reduce((sum, r) => sum + r.placesReservees, 0);
+    const aggregationPipeline = [
+      // Étape 1: Jointure avec la collection 'trajets' pour trouver tous les trajets assignés à chaque bus
+      {
+        $lookup: {
+          from: 'trajets', // Le nom de la collection dans MongoDB
+          localField: '_id',
+          foreignField: 'bus',
+          as: 'trajetsAssignes'
         }
+      },
+      // Étape 2: Ajouter des champs calculés à chaque document de bus
+      {
+        $addFields: {
+          // Créer un tableau ne contenant que les trajets futurs
+          trajetsFuturs: {
+            $filter: {
+              input: '$trajetsAssignes',
+              as: 'trajet',
+              cond: { $gte: ['$$trajet.dateDepart', today] }
+            }
+          }
+        }
+      },
+      // Étape 3: Faire une autre jointure pour récupérer les réservations des trajets futurs
+      {
+        $lookup: {
+          from: 'reservations',
+          localField: 'trajetsFuturs._id',
+          foreignField: 'trajet',
+          as: 'reservationsFutures'
+        }
+      },
+      // Étape 4: Projeter (formater) le résultat final
+      {
+        $project: {
+          _id: 1, // Garder les champs originaux du bus
+          numero: 1,
+          etat: 1,
+          capacite: 1,
+          createdAt: 1,
+          updatedAt: 1,
+          // Calculer la somme des places réservées uniquement pour les réservations 'confirmée'
+          placesReservees: {
+            $sum: {
+              $map: {
+                input: {
+                  $filter: {
+                    input: "$reservationsFutures",
+                    as: "res",
+                    cond: { $eq: ["$$res.statut", "confirmée"] }
+                  }
+                },
+                as: "reservation",
+                in: "$$reservation.placesReservees"
+              }
+            }
+          },
+          // Trier les trajets futurs par date et prendre le premier pour l'afficher
+          prochainTrajet: {
+            $first: {
+              $sortArray: {
+                input: "$trajetsFuturs",
+                sortBy: { dateDepart: 1 }
+              }
+            }
+          }
+        }
+      }
+    ];
 
-        return {
-          ...bus,
-          placesReservees: totalPlacesReservees,
-          prochainTrajet: prochainTrajet
-        };
-      })
-    );
+    const busesWithStats = await Bus.aggregate(aggregationPipeline);
+    
+    // Simplifier l'objet 'prochainTrajet' pour qu'il soit plus facile à utiliser sur le frontend
+    const finalResult = busesWithStats.map(bus => ({
+        ...bus,
+        prochainTrajet: bus.prochainTrajet ? {
+            destination: `${bus.prochainTrajet.villeDepart} → ${bus.prochainTrajet.villeArrivee}`,
+            date: bus.prochainTrajet.dateDepart
+        } : null
+    }));
 
-    res.json(busesWithStats);
+    res.json(finalResult);
 
   } catch (err) {
-    console.error("Erreur getBuses:", err);
-    res.status(500).json({ message: err.message });
+    console.error("Erreur [getBuses]:", err);
+    res.status(500).json({ message: "Erreur serveur lors de la récupération des bus." });
   }
 };
 
 
-// Le reste des fonctions (createBus, getBusById, etc.) reste le même
-// ...
-
-// POST /api/admin/bus
+/**
+ * @desc    Créer un nouveau bus
+ * @route   POST /api/admin/bus
+ * @access  Admin
+ */
 exports.createBus = async (req, res) => {
   try {
     const bus = await Bus.create(req.body);
@@ -66,7 +117,11 @@ exports.createBus = async (req, res) => {
   }
 };
 
-// GET /api/admin/bus/:id
+/**
+ * @desc    Récupérer un bus par son ID
+ * @route   GET /api/admin/bus/:id
+ * @access  Admin
+ */
 exports.getBusById = async (req, res) => {
   try {
     const bus = await Bus.findById(req.params.id);
@@ -77,7 +132,11 @@ exports.getBusById = async (req, res) => {
   }
 };
 
-// PUT /api/admin/bus/:id
+/**
+ * @desc    Mettre à jour un bus
+ * @route   PUT /api/admin/bus/:id
+ * @access  Admin
+ */
 exports.updateBus = async (req, res) => {
   try {
     const bus = await Bus.findByIdAndUpdate(req.params.id, req.body, {
@@ -91,12 +150,16 @@ exports.updateBus = async (req, res) => {
   }
 };
 
-// DELETE /api/admin/bus/:id
+/**
+ * @desc    Supprimer un bus
+ * @route   DELETE /api/admin/bus/:id
+ * @access  Admin
+ */
 exports.deleteBus = async (req, res) => {
   try {
     const bus = await Bus.findByIdAndDelete(req.params.id);
     if (!bus) return res.status(404).json({ message: "Bus non trouvé" });
-    res.json({ message: "Bus supprimé" });
+    res.json({ message: "Bus supprimé avec succès" });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
