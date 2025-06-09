@@ -1,7 +1,86 @@
 // backend/controllers/tracking.controller.js
+const mongoose = require('mongoose'); // <-- LA LIGNE MANQUANTE À AJOUTER
 const Reservation = require('../models/reservation.model');
 const LiveTrip = require('../models/LiveTrip.model');
 const Trajet = require('../models/trajet.model');
+
+/**
+ * @desc    Pour un admin, démarrer le suivi en direct d'un voyage
+ * @route   POST /api/tracking/start-trip
+ * @access  Admin
+ */
+exports.startTrip = async (req, res) => {
+    try {
+        const { trajetId } = req.body;
+        if (!trajetId) {
+            return res.status(400).json({ message: "L'ID du trajet est requis." });
+        }
+        
+        // S'assurer que l'ID est bien un ObjectId valide
+        const trajetObjectId = new mongoose.Types.ObjectId(trajetId);
+
+        const trajet = await Trajet.findById(trajetObjectId).populate('bus');
+        if (!trajet) return res.status(404).json({ message: "Trajet non trouvé" });
+        if (!trajet.bus) return res.status(400).json({ message: "Aucun bus n'est assigné à ce trajet." });
+
+        // Chercher si un LiveTrip existe déjà pour ce trajet
+        let liveTrip = await LiveTrip.findOne({ trajetId: trajetObjectId });
+
+        if (liveTrip) {
+            // S'il existe, on le met juste à jour
+            liveTrip.status = 'En cours';
+            liveTrip.lastUpdated = new Date();
+        } else {
+            // Sinon, on en crée un nouveau
+            liveTrip = new LiveTrip({
+                trajetId: trajet._id,
+                busId: trajet.bus._id,
+                originCityName: trajet.villeDepart,
+                destinationCityName: trajet.villeArrivee,
+                departureDateTime: trajet.dateDepart,
+                status: 'En cours',
+            });
+        }
+        
+        await liveTrip.save();
+        console.log(`Voyage pour le trajet ${trajetId} démarré avec succès.`);
+        res.status(200).json({ message: "Le voyage a démarré.", liveTrip });
+
+    } catch (err) {
+        console.error("Erreur startTrip:", err);
+        res.status(500).json({ message: err.message });
+    }
+};
+
+/**
+ * @desc    Mettre à jour la position GPS d'un bus pour un voyage en direct
+ * @route   POST /api/tracking/live/:liveTripId/update-position
+ * @access  Admin (ou un appareil GPS autorisé)
+ */
+exports.updateBusPosition = async (req, res) => {
+    try {
+        const { liveTripId } = req.params;
+        const { lat, lng } = req.body;
+        if (typeof lat !== 'number' || typeof lng !== 'number') {
+            return res.status(400).json({ message: "Les coordonnées lat et lng sont requises et doivent être des nombres." });
+        }
+
+        const liveTrip = await LiveTrip.findByIdAndUpdate(
+            liveTripId,
+            { 
+                currentPosition: { lat, lng },
+                lastUpdated: new Date()
+            },
+            { new: true }
+        );
+
+        if (!liveTrip) return res.status(404).json({ message: "Voyage en cours non trouvé." });
+        
+        res.status(200).json(liveTrip);
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+};
 
 /**
  * @desc    Pour le client, récupère les informations de son prochain voyage confirmé
@@ -10,9 +89,8 @@ const Trajet = require('../models/trajet.model');
  */
 exports.getMyNextTrip = async (req, res) => {
     try {
-        const now = new Date(); // Date et heure actuelles
+        const now = new Date();
 
-        // 1. Trouver toutes les réservations confirmées pour ce client
         const allConfirmedReservations = await Reservation.find({
             client: req.user._id,
             statut: 'confirmée',
@@ -22,25 +100,16 @@ exports.getMyNextTrip = async (req, res) => {
             return res.json({ message: "Vous n'avez aucune réservation confirmée." });
         }
 
-        // --- LOGIQUE CORRIGÉE ---
-        // 2. Filtrer pour ne garder que les trajets dont l'heure de départ n'est pas encore passée
-        const futureReservations = allConfirmedReservations.filter(res => {
-            if (!res.trajet) return false;
-
-            // On construit la date de départ complète en combinant la date et l'heure du trajet
-            const departureDateStr = new Date(res.trajet.dateDepart).toISOString().split('T')[0];
-            const departureDateTime = new Date(`${departureDateStr}T${res.trajet.heureDepart}:00`);
-            
-            // On compare cette date complète avec la date et l'heure actuelles
+        const futureReservations = allConfirmedReservations.filter(r => {
+            if (!r.trajet) return false;
+            const departureDateTime = new Date(`${new Date(r.trajet.dateDepart).toISOString().split('T')[0]}T${r.trajet.heureDepart}:00`);
             return departureDateTime >= now;
         });
-        // -----------------------
 
         if (futureReservations.length === 0) {
             return res.json({ message: "Vous n'avez aucun voyage à venir." });
         }
 
-        // 3. Trier pour trouver le voyage le plus proche dans le temps
         futureReservations.sort((a, b) => {
             const dateA = new Date(`${new Date(a.trajet.dateDepart).toISOString().split('T')[0]}T${a.trajet.heureDepart}:00`);
             const dateB = new Date(`${new Date(b.trajet.dateDepart).toISOString().split('T')[0]}T${b.trajet.heureDepart}:00`);
@@ -48,8 +117,6 @@ exports.getMyNextTrip = async (req, res) => {
         });
         
         const nextReservation = futureReservations[0];
-
-        // 4. Vérifier s'il y a un LiveTrip associé à ce prochain trajet
         const liveTrip = await LiveTrip.findOne({ trajetId: nextReservation.trajet._id });
 
         res.json({
@@ -61,51 +128,4 @@ exports.getMyNextTrip = async (req, res) => {
         console.error("Erreur getMyNextTrip:", err);
         res.status(500).json({ message: err.message });
     }
-};
-
-
-exports.startTrip = async (req, res) => {
-    try {
-        const { trajetId } = req.body;
-        
-        // --- CORRECTION : S'assurer que l'ID est bien un ObjectId ---
-        const trajetObjectId = new mongoose.Types.ObjectId(trajetId);
-        // -----------------------------------------------------------
-
-        const trajet = await Trajet.findById(trajetObjectId).populate('bus');
-        if (!trajet) return res.status(404).json({ message: "Trajet non trouvé" });
-        if (!trajet.bus) return res.status(400).json({ message: "Aucun bus n'est assigné à ce trajet." });
-
-        // On utilise l'ObjectId pour la recherche
-        let liveTrip = await LiveTrip.findOne({ trajetId: trajetObjectId });
-
-        if (liveTrip) {
-            liveTrip.status = 'En cours';
-        } else {
-            liveTrip = new LiveTrip({
-                trajetId: trajet._id, // trajet._id est déjà un ObjectId
-                busId: trajet.bus._id,
-                originCityName: trajet.villeDepart,
-                destinationCityName: trajet.villeArrivee,
-                departureDateTime: trajet.dateDepart,
-                status: 'En cours',
-            });
-        }
-        
-        await liveTrip.save();
-        res.status(200).json({ message: "Le voyage a démarré.", liveTrip });
-
-    } catch (err) {
-        console.error("Erreur startTrip:", err);
-        res.status(500).json({ message: err.message });
-    }
-};
-exports.updateBusPosition = async (req, res) => {
-    try {
-        const { liveTripId } = req.params;
-        const { lat, lng } = req.body;
-        const liveTrip = await LiveTrip.findByIdAndUpdate( liveTripId, { currentPosition: { lat, lng }, lastUpdated: new Date() }, { new: true });
-        if (!liveTrip) return res.status(404).json({ message: "Voyage en cours non trouvé." });
-        res.status(200).json(liveTrip);
-    } catch (err) { res.status(500).json({ message: err.message }); }
 };
