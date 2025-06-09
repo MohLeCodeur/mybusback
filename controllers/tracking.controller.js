@@ -64,26 +64,41 @@ exports.getMyNextTrip = async (req, res) => {
 };
 
 
-// Les autres fonctions (startTrip, updateBusPosition) restent les mêmes.
 exports.startTrip = async (req, res) => {
     try {
         const { trajetId } = req.body;
-        const trajet = await Trajet.findById(trajetId).populate('bus');
+        
+        // --- CORRECTION : S'assurer que l'ID est bien un ObjectId ---
+        const trajetObjectId = new mongoose.Types.ObjectId(trajetId);
+        // -----------------------------------------------------------
+
+        const trajet = await Trajet.findById(trajetObjectId).populate('bus');
         if (!trajet) return res.status(404).json({ message: "Trajet non trouvé" });
         if (!trajet.bus) return res.status(400).json({ message: "Aucun bus n'est assigné à ce trajet." });
-        let liveTrip = await LiveTrip.findOne({ trajetId });
+
+        // On utilise l'ObjectId pour la recherche
+        let liveTrip = await LiveTrip.findOne({ trajetId: trajetObjectId });
+
         if (liveTrip) {
             liveTrip.status = 'En cours';
         } else {
             liveTrip = new LiveTrip({
-                trajetId: trajet._id, busId: trajet.bus._id,
-                originCityName: trajet.villeDepart, destinationCityName: trajet.villeArrivee,
-                departureDateTime: trajet.dateDepart, status: 'En cours',
+                trajetId: trajet._id, // trajet._id est déjà un ObjectId
+                busId: trajet.bus._id,
+                originCityName: trajet.villeDepart,
+                destinationCityName: trajet.villeArrivee,
+                departureDateTime: trajet.dateDepart,
+                status: 'En cours',
             });
         }
+        
         await liveTrip.save();
         res.status(200).json({ message: "Le voyage a démarré.", liveTrip });
-    } catch (err) { res.status(500).json({ message: err.message }); }
+
+    } catch (err) {
+        console.error("Erreur startTrip:", err);
+        res.status(500).json({ message: err.message });
+    }
 };
 exports.updateBusPosition = async (req, res) => {
     try {
