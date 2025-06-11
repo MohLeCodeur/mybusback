@@ -2,8 +2,11 @@
 const express = require('express');
 const router = express.Router();
 const { getColisByCode } = require('../../controllers/colis.controller');
+const { protect } = require('../../middlewares/auth.middleware'); // Importer le middleware de protection
 
-// Route publique pour que n'importe qui puisse suivre un colis avec son code
-router.get('/track/:code', getColisByCode);
+// --- ROUTE MODIFIÉE ---
+// On ajoute le middleware 'protect' pour s'assurer que seul un utilisateur connecté peut l'appeler.
+router.get('/track/:code', protect, getColisByCode);
+// --------------------
 
 module.exports = router;
