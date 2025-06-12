@@ -149,28 +149,49 @@ exports.updateColis = async (req, res) => {
     const { id } = req.params;
     const updates = req.body;
 
-    // --- CORRECTION ET AMÉLIORATION DE LA LOGIQUE ---
-    
-    // 1. Récupérer le colis existant
-    const colis = await Colis.findById(id);
-    if (!colis) {
+    // 1. Récupérer le colis AVANT la mise à jour pour connaître son ancien statut
+    const colisAvant = await Colis.findById(id).lean();
+    if (!colisAvant) {
       return res.status(404).json({ message: "Colis non trouvé" });
     }
+    const ancienStatut = colisAvant.statut;
 
-    // 2. Appliquer les mises à jour du formulaire
-    Object.assign(colis, updates);
-
-    // 3. Le "hook" pre-save dans le modèle s'occupera de recalculer le prix
-    //    car nous allons utiliser .save() qui déclenche ce hook.
-    //    Le hook est déjà programmé pour recalculer le prix si poids, distance ou valeur sont modifiés.
-
-    // 4. Sauvegarder le document mis à jour
-    const updatedColis = await colis.save();
+    // 2. Mettre à jour le document
+    const colisApres = await Colis.findByIdAndUpdate(id, updates, { new: true });
     
-    // ------------------------------------------------
+    // --- NOUVELLE LOGIQUE DE NOTIFICATION ---
+    // 3. Vérifier si le statut a réellement changé
+    if (ancienStatut !== colisApres.statut) {
+      console.log(`Le statut du colis ${colisApres.code_suivi} a changé de '${ancienStatut}' à '${colisApres.statut}'. Envoi de notification...`);
 
-    // 5. Renvoyer le colis mis à jour (avec le nouveau prix)
-    return res.json(updatedColis);
+      // La suite de la logique est identique à celle de updateStatutColis
+      if (colisApres.expediteur_email) {
+          const user = await Client.findOne({ email: colisApres.expediteur_email });
+          if (user) {
+              const recipientSocketId = req.onlineUsers[user._id.toString()];
+              if (recipientSocketId) {
+                  let message;
+                  if (colisApres.statut === 'encours') message = `Votre colis pour ${colisApres.destinataire_nom} est maintenant en cours de livraison.`;
+                  else if (colisApres.statut === 'arrivé') message = `Bonne nouvelle ! Votre colis pour ${colisApres.destinataire_nom} est arrivé à destination.`;
+                  else message = `Le statut de votre colis est maintenant : ${colisApres.statut}.`;
+
+                  req.io.to(recipientSocketId).emit("getNotification", {
+                      title: `Mise à jour du colis #${colisApres.code_suivi}`,
+                      message: message,
+                      link: `/dashboard`
+                  });
+                  console.log(`Notification envoyée à ${user.email}`);
+              } else {
+                  console.log(`Utilisateur ${user.email} trouvé mais n'est pas en ligne.`);
+              }
+          } else {
+              console.log(`Aucun utilisateur enregistré avec l'email ${colisApres.expediteur_email}.`);
+          }
+      }
+    }
+    // ----------------------------------------
+
+    return res.json(colisApres);
 
   } catch (err) {
     console.error("Erreur update colis :", err);
