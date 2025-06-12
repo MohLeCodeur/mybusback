@@ -78,20 +78,53 @@ exports.updateStatutColis = async (req, res) => {
     }
 
     const colis = await Colis.findById(id);
-    if (!colis) return res.status(404).json({ message: "Colis non trouvé" });
+    if (!colis) {
+      return res.status(404).json({ message: "Colis non trouvé" });
+    }
 
+    // On ne fait rien si le statut ne change pas
+    if (colis.statut === statut) {
+        return res.json(colis);
+    }
+    
     colis.statut = statut;
     await colis.save();
 
-    // Envoi SMS si nécessaire
-    // if (statut === 'arrivé') {
-    //   const message = `Votre colis (${colis.code_suivi}) est arrivé.`;
-    //   await smsService.sendSMS(colis.destinataire_telephone, message);
-    // }
+    // --- SECTION D'ÉMISSION DE LA NOTIFICATION ---
+    // 1. Vérifier si on a un email d'expéditeur
+    if (colis.expediteur_email) {
+        // 2. Trouver l'utilisateur correspondant à cet email
+        const user = await Client.findOne({ email: colis.expediteur_email });
+
+        // 3. S'il existe et qu'il est en ligne, lui envoyer la notif
+        if (user) {
+            const recipientSocketId = req.onlineUsers[user._id.toString()];
+            if (recipientSocketId) {
+                console.log(`Envoi de la notification de colis à l'utilisateur ${user._id} sur le socket ${recipientSocketId}`);
+                
+                let message;
+                if (statut === 'encours') {
+                    message = `Votre colis pour ${colis.destinataire_nom} est maintenant en cours de livraison.`;
+                } else if (statut === 'arrivé') {
+                    message = `Bonne nouvelle ! Votre colis pour ${colis.destinataire_nom} est arrivé à destination.`;
+                } else {
+                    message = `Le statut de votre colis est maintenant : ${statut}.`;
+                }
+
+                req.io.to(recipientSocketId).emit("getNotification", {
+                    title: `Mise à jour du colis #${colis.code_suivi}`,
+                    message: message,
+                    link: `/dashboard` // Le client peut voir les détails dans son dashboard
+                });
+            }
+        }
+    }
+    // ---------------------------------------------
 
     return res.json(colis);
+
   } catch (err) {
-    console.error("Erreur mise à jour statut :", err);
+    console.error("Erreur mise à jour statut colis :", err);
     return res.status(500).json({ message: err.message });
   }
 };
