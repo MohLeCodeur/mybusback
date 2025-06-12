@@ -1,5 +1,6 @@
 const Colis = require("../models/colis.model");
 // const smsService = require('../services/sms.service'); // si SMS
+const Client = require("../models/client.model"); 
 
 exports.creerColis = async (req, res) => {
   try {
