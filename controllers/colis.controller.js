@@ -45,11 +45,20 @@ exports.getAllColis = async (req, res) => {
 exports.getColisById = async (req, res) => {
   try {
     const { id } = req.params;
-    const colis = await Colis.findById(id);
-    if (!colis) return res.status(404).json({ message: "Colis non trouvé" });
+    
+    // --- LIGNE CORRIGÉE ---
+    // On ajoute .populate('trajet') pour récupérer les détails du trajet associé.
+    const colis = await Colis.findById(id).populate('trajet');
+    // ----------------------
+
+    if (!colis) {
+      return res.status(404).json({ message: "Colis non trouvé" });
+    }
+    
     return res.json(colis);
+    
   } catch (err) {
-    console.error("Erreur récupération colis :", err);
+    console.error("Erreur getColisById:", err);
     return res.status(500).json({ message: err.message });
   }
 };
