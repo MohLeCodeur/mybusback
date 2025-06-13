@@ -4,33 +4,31 @@ const Client = require("../models/client.model");
 
 exports.creerColis = async (req, res) => {
   try {
-    const {
-      description,
-      poids,
-      distance,
-      valeur,
-      expediteur_nom,
-      expediteur_telephone,
-      destinataire_nom,
-      destinataire_telephone,
-    } = req.body;
+    // On log ce que le backend reçoit pour être sûr
+    console.log("Corps de la requête reçu pour créer un colis :", req.body);
 
-    const nouveauColis = new Colis({
-      description,
-      poids,
-      distance,
-      valeur,
-      expediteur_nom,
-      expediteur_telephone,
-      destinataire_nom,
-      destinataire_telephone,
-    });
+    // La manière la plus simple et la plus sûre est de passer directement req.body
+    // au constructeur, car le frontend envoie maintenant un objet qui correspond au schéma.
+    const nouveauColis = new Colis(req.body);
 
+    // La validation (y compris la vérification que `trajet` est présent)
+    // sera gérée par Mongoose lors du .save()
     await nouveauColis.save();
+    
+    // On renvoie le document complet qui a été créé
     return res.status(201).json(nouveauColis);
+
   } catch (err) {
     console.error("Erreur création colis :", err);
-    return res.status(400).json({ message: err.message });
+
+    // Si c'est une erreur de validation de Mongoose, on renvoie un message clair
+    if (err.name === 'ValidationError') {
+        // On peut extraire le premier message d'erreur pour plus de clarté
+        const messages = Object.values(err.errors).map(val => val.message);
+        return res.status(400).json({ message: messages[0] || "Données invalides." });
+    }
+    
+    return res.status(500).json({ message: "Erreur interne du serveur." });
   }
 };
 
