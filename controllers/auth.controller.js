@@ -1,6 +1,7 @@
 // backend/controllers/auth.controller.js
 const Client = require("../models/client.model");
 const jwt = require("jsonwebtoken");
+const { validationResult } = require("express-validator");
 
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, {
@@ -10,42 +11,31 @@ const generateToken = (id) => {
 
 // POST /api/auth/register
 exports.register = async (req, res) => {
+  // --- NOUVELLE PARTIE : VÉRIFICATION DES RÉSULTATS DE VALIDATION ---
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    // S'il y a des erreurs, on renvoie la première au client
+    return res.status(400).json({ message: errors.array()[0].msg });
+  }
+  // -----------------------------------------------------------------
+
   const { prenom, nom, email, mot_de_passe, telephone } = req.body;
   try {
     const userExists = await Client.findOne({ email });
     if (userExists) {
-      return res.status(400).json({ message: "Cet email est déjà utilisé" });
+      return res.status(400).json({ message: "Cet email est déjà utilisé." });
     }
 
-    // =======================================================
-    // === NOUVELLE LOGIQUE D'ASSIGNATION DE RÔLE ===
-    // =======================================================
-    let role = 'client'; // Par défaut, le rôle est 'client'
-
-    // Vérifie si l'email se termine par "@admin.ml"
+    let role = 'client';
     if (email && email.toLowerCase().endsWith('@admin.ml')) {
-      role = 'admin'; // Si c'est le cas, on assigne le rôle 'admin'
+      role = 'admin';
     }
-    // =======================================================
-
-    // On crée l'utilisateur avec le rôle déterminé
-    const user = await Client.create({ 
-      prenom, 
-      nom, 
-      email, 
-      mot_de_passe, 
-      telephone, 
-      role // On utilise la variable 'role' ici
-    });
-
-    console.log(`Nouvel utilisateur inscrit: ${user.email} avec le rôle: ${user.role}`); // Log pour le débogage
+    
+    const user = await Client.create({ prenom, nom, email, mot_de_passe, telephone, role });
 
     res.status(201).json({
-      _id: user._id,
-      prenom: user.prenom,
-      nom: user.nom,
-      email: user.email,
-      role: user.role, // On renvoie le bon rôle au frontend
+      _id: user._id, prenom: user.prenom, nom: user.nom,
+      email: user.email, role: user.role,
       token: generateToken(user._id),
     });
   } catch (error) {
