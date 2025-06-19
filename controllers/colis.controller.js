@@ -34,10 +34,13 @@ exports.creerColis = async (req, res) => {
 
 exports.getAllColis = async (req, res) => {
   try {
-    const colisList = await Colis.find().sort({ date_enregistrement: -1 });
+    const colisList = await Colis.find({})
+      // --- CORRECTION : On peuple le trajet pour avoir les noms des villes ---
+      .populate('trajet', 'villeDepart villeArrivee')
+      .sort({ date_enregistrement: -1 });
+      
     return res.json(colisList);
   } catch (err) {
-    console.error("Erreur récupération colis :", err);
     return res.status(500).json({ message: err.message });
   }
 };
