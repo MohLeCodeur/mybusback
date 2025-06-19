@@ -1,123 +1,114 @@
 // backend/seed.js
+// Ce script nettoie et peuple les collections avec des données de test enrichies.
+
 require('dotenv').config();
-const { MongoClient } = require('mongodb');
+const mongoose = require('mongoose');
+const Trajet = require('./models/trajet.model');
+const Bus = require('./models/bus.model');
+const Reservation = require('./models/reservation.model');
 
-const uri = process.env.MONGO_URI;
-if (!uri) throw new Error('⚠️  Veuillez ajouter MONGO_URI à votre fichier .env');
+// --- LISTE DE VILLES ENRICHIE ---
+const CITIES_COORDS = {
+    'Bamako': { lat: 12.6392, lng: -8.0029 },
+    'Kayes': { lat: 14.4469, lng: -11.4443 },
+    'Koulikoro': { lat: 12.8628, lng: -7.5599 },
+    'Sikasso': { lat: 11.3176, lng: -5.6665 },
+    'Ségou': { lat: 13.4317, lng: -6.2658 },
+    'Mopti': { lat: 14.4944, lng: -4.1970 },
+    'Tombouctou': { lat: 16.7735, lng: -3.0074 },
+    'Gao': { lat: 16.2666, lng: -0.0400 },
+    'Kidal': { lat: 18.4411, lng: 1.4078 },
+    'Koutiala': { lat: 12.3917, lng: -5.4642 },
+    'Kita': { lat: 13.0444, lng: -9.4895 },
+    'Nioro du Sahel': { lat: 15.2291, lng: -9.5855 },
+    'Bougouni': { lat: 11.4194, lng: -7.4817 },
+};
 
-const client = new MongoClient(uri);
-
-// Données réalistes pour les capitales régionales du Mali
-const capitalesRegionales = [
-    { nom: "Bamako", coords: { lat: 12.6392, lng: -8.0029 } },
-    { nom: "Kayes", coords: { lat: 14.4469, lng: -11.4443 } },
-    { nom: "Koulikoro", coords: { lat: 12.8623, lng: -7.5599 } },
-    { nom: "Sikasso", coords: { lat: 11.3176, lng: -5.6665 } },
-    { nom: "Ségou", coords: { lat: 13.4317, lng: -6.2658 } },
-    { nom: "Mopti", coords: { lat: 14.4944, lng: -4.1970 } },
-    { nom: "Tombouctou", coords: { lat: 16.7713, lng: -3.0074 } },
-    { nom: "Gao", coords: { lat: 16.2666, lng: -0.0400 } },
-    { nom: "Kidal", coords: { lat: 18.4411, lng: 1.4078 } },
+// --- LISTE DE COMPAGNIES ENRICHIE ---
+const COMPANIES = [
+    'Diarra Transport', 'Bani Transport', 'Sonef Mali', 'Gana Transport',
+    'Sogatra Voyages', 'Folona Express', 'Binke Transport', 'Africa Tours Trans',
+    'Bittar Trans', 'Nour Transport Voyageurs'
 ];
 
-async function runSeeding() {
-    try {
-        await client.connect();
-        console.log('✅ Connecté à MongoDB pour le seeding.');
-        const db = client.db();
-        
-        // Collections
-        const busesCollection = db.collection('buses');
-        const trajetsCollection = db.collection('trajets');
-        const reservationsCollection = db.collection('reservations');
-        const colisCollection = db.collection('colis');
-        const chauffeursCollection = db.collection('chauffeurs');
-        const liveTripsCollection = db.collection('livetrips');
+const HEURES_DEPART = ['06:00', '07:30', '08:00', '09:30', '14:00', '16:00', '20:00', '21:00'];
 
-        // 1. Nettoyage complet
-        console.log('Nettoyage de toutes les collections de test...');
-        await busesCollection.deleteMany({});
-        await trajetsCollection.deleteMany({});
-        await reservationsCollection.deleteMany({});
-        await colisCollection.deleteMany({});
-        await chauffeursCollection.deleteMany({});
-        await liveTripsCollection.deleteMany({});
+const seedDatabase = async () => {
+    const mongoURI = process.env.MONGODB_URI;
+    if (!mongoURI) {
+        console.error('❌ Erreur: MONGODB_URI n\'est pas défini dans .env');
+        process.exit(1);
+    }
+
+    try {
+        await mongoose.connect(mongoURI);
+        console.log('✅ Connecté à MongoDB');
+
+        console.log('Nettoyage des collections...');
+        await Trajet.deleteMany({});
+        await Bus.deleteMany({});
+        await Reservation.deleteMany({});
         console.log('Collections nettoyées.');
 
-        // 2. Création des bus
-        console.log('Création des bus...');
-        const busData = [
-            { numero: 'BKO-001', etat: 'en service', capacite: 55, createdAt: new Date(), updatedAt: new Date() },
-            { numero: 'SEG-002', etat: 'en service', capacite: 50, createdAt: new Date(), updatedAt: new Date() },
-            { numero: 'MPT-003', etat: 'en service', capacite: 60, createdAt: new Date(), updatedAt: new Date() },
-            { numero: 'KYS-004', etat: 'maintenance', capacite: 55, createdAt: new Date(), updatedAt: new Date() },
-        ];
-        const insertedBusesResult = await busesCollection.insertMany(busData);
-        const busIds = Object.values(insertedBusesResult.insertedIds);
-        console.log(`✅ ${busIds.length} bus créés.`);
+        console.log('Création de 15 bus de test...');
+        const busData = [];
+        for (let i = 1; i <= 15; i++) {
+            busData.push({
+                numero: `MYBUS-${200 + i}`,
+                etat: 'en service',
+                capacite: 50 + (i % 4 * 5) // Capacités: 50, 55, 60, 65
+            });
+        }
+        const createdBuses = await Bus.insertMany(busData);
+        console.log(`✅ ${createdBuses.length} bus créés.`);
 
-        // 3. Création des trajets avec les coordonnées GPS
-        console.log('Génération des trajets...');
-        const companies = ['Sama Transport', 'Bani Transport', 'Sonef', 'Diarra Transport'];
+        console.log('Génération de 50 trajets entre aujourd\'hui et fin août...');
         const trajetsToCreate = [];
+        const cityNames = Object.keys(CITIES_COORDS);
+        
+        const startDate = new Date();
+        const endDate = new Date(startDate.getFullYear(), 7, 31); // 31 Août
+        const diffTime = Math.abs(endDate - startDate);
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
-        // Créer des trajets entre différentes paires de villes
-        const trajetsPairs = [
-            { from: "Bamako", to: "Ségou" },
-            { from: "Bamako", to: "Sikasso" },
-            { from: "Ségou", to: "Mopti" },
-            { from: "Bamako", to: "Kayes" },
-            { from: "Mopti", to: "Gao" },
-            { from: "Sikasso", to: "Bamako" }, // Trajet retour
-            { from: "Kayes", to: "Bamako" },   // Trajet retour
-        ];
-
-        trajetsPairs.forEach((pair, index) => {
-            const departCity = capitalesRegionales.find(c => c.nom === pair.from);
-            const arriveeCity = capitalesRegionales.find(c => c.nom === pair.to);
-
-            if (!departCity || !arriveeCity) return; // Sécurité
-
-            // Créer 2 trajets pour chaque paire de villes, à des jours différents
-            for (let i = 1; i <= 2; i++) {
-                const dateDepart = new Date();
-                dateDepart.setUTCDate(dateDepart.getUTCDate() + i + index); // Assure des dates futures variées
-                dateDepart.setUTCHours(i === 1 ? 8 : 15, 0, 0, 0); // Deux horaires différents
-
-                trajetsToCreate.push({
-                    villeDepart: departCity.nom,
-                    villeArrivee: arriveeCity.nom,
-                    coordsDepart: departCity.coords,
-                    coordsArrivee: arriveeCity.coords,
-                    compagnie: companies[index % companies.length],
-                    dateDepart: dateDepart,
-                    heureDepart: dateDepart.getUTCHours() === 8 ? '08:00' : '15:00',
-                    prix: (Math.floor(Math.random() * 10) + 7) * 1000,
-                    placesDisponibles: 50,
-                    bus: busIds[index % busIds.length],
-                    isActive: true,
-                    createdAt: new Date(),
-                    updatedAt: new Date(),
-                });
+        for (let i = 0; i < 50; i++) { // Générer 50 trajets
+            let villeDepart = cityNames[Math.floor(Math.random() * cityNames.length)];
+            let villeArrivee = cityNames[Math.floor(Math.random() * cityNames.length)];
+            
+            while (villeDepart === villeArrivee) {
+                villeArrivee = cityNames[Math.floor(Math.random() * cityNames.length)];
             }
-        });
+            
+            const randomDaysToAdd = Math.floor(Math.random() * diffDays);
+            const dateDepart = new Date();
+            dateDepart.setDate(dateDepart.getDate() + randomDaysToAdd);
 
-        if (trajetsToCreate.length > 0) {
-            const { insertedCount } = await trajetsCollection.insertMany(trajetsToCreate);
-            console.log(`✅ ${insertedCount} trajets réalistes créés avec coordonnées GPS.`);
-        } else {
-            console.log("Aucun trajet n'a été créé. Vérifiez les données des villes.");
+            const nouveauTrajet = {
+                villeDepart,
+                villeArrivee,
+                coordsDepart: CITIES_COORDS[villeDepart],
+                coordsArrivee: CITIES_COORDS[villeArrivee],
+                compagnie: COMPANIES[Math.floor(Math.random() * COMPANIES.length)],
+                dateDepart,
+                heureDepart: HEURES_DEPART[Math.floor(Math.random() * HEURES_DEPART.length)],
+                prix: (Math.floor(Math.random() * 25) + 5) * 1000, // Prix entre 5000 et 30000
+                placesDisponibles: 50,
+                bus: createdBuses[Math.floor(Math.random() * createdBuses.length)]._id,
+                isActive: true,
+            };
+            trajetsToCreate.push(nouveauTrajet);
         }
 
-        console.log('\nOpération de seeding terminée avec succès !');
+        await Trajet.insertMany(trajetsToCreate);
+        console.log(`✅ ${trajetsToCreate.length} trajets ont été créés avec succès.`);
+        console.log('Opération de seeding terminée.');
 
     } catch (err) {
         console.error("❌ Une erreur est survenue lors du seeding:", err);
     } finally {
-        await client.close();
+        await mongoose.disconnect();
         console.log('Connexion à MongoDB fermée.');
-        process.exit(0);
     }
-}
+};
 
-runSeeding();
+seedDatabase();
