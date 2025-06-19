@@ -104,7 +104,21 @@ exports.createTrajet = async (req, res) => {
  */
 exports.getAllTrajetsAdmin = async (req, res) => {
   try {
-    const trajets = await Trajet.find({}).populate('bus').sort({ dateDepart: -1 });
+    const { status } = req.query; // ex: 'avenir', 'passes'
+    let dateFilter = {};
+    const now = new Date();
+
+    if (status === 'avenir') {
+        dateFilter = { dateDepart: { $gte: now } };
+    } else if (status === 'passes') {
+        dateFilter = { dateDepart: { $lt: now } };
+    }
+    // Si aucun statut, on les prend tous
+
+    const trajets = await Trajet.find(dateFilter)
+        .populate('bus', 'numero etat')
+        .sort({ dateDepart: -1 }); // Les plus récents/prochains en premier
+    
     res.json(trajets);
   } catch (err) {
     res.status(500).json({ message: err.message });
