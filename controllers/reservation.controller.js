@@ -166,19 +166,21 @@ exports.getReservationByIdPublic = async (req, res) => {
 
 exports.getAllReservationsAdmin = async (req, res) => {
   try {
-    // --- LIGNE CORRIGÉE ---
-    // On utilise find() pour obtenir toutes les réservations, pas findById().
-    const list = await Reservation.find({}) 
+    const { statut } = req.query; // ex: 'confirmée', 'en_attente'
+    let queryFilter = {};
+
+    if (statut && ['confirmée', 'en_attente', 'annulée'].includes(statut)) {
+        queryFilter.statut = statut;
+    }
+
+    const list = await Reservation.find(queryFilter)
       .populate('client', 'prenom nom email')
       .populate({
         path: 'trajet',
-        populate: {
-          path: 'bus',
-          model: 'Bus'
-        }
+        select: 'villeDepart villeArrivee dateDepart prix', // On ne récupère que les champs utiles
+        populate: { path: 'bus', select: 'numero' }
       })
       .sort({ dateReservation: -1 });
-    // -----------------------
 
     res.json(list);
   } catch (err) {
