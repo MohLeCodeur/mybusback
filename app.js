@@ -8,10 +8,6 @@ const http = require('http');
 const { Server } = require("socket.io");
 const connectDB = require('./config/db');
 
-// Import des modèles nécessaires pour le job d'automatisation
-const Colis = require('./models/colis.model');
-const Trajet = require('./models/trajet.model');
-
 // --- Connexion à la base de données ---
 connectDB();
 
@@ -70,60 +66,13 @@ app.use('/api/admin/stats', require('./routes/admin/stats.routes'));
 app.use('/api/admin/paiements', require('./routes/admin/paiement.routes.js'));
 app.use('/api/admin/villes', require('./routes/admin/ville.routes'));
 
-// --- JOB D'AUTOMATISATION DU STATUT DES COLIS ---
-const JOB_INTERVAL_MS = 5 * 60 * 1000; // Toutes les 5 minutes
+// --- JOB D'AUTOMATISATION RETIRÉ ---
+// La section 'setInterval(updateColisStatuses, ...)' a été complètement supprimée.
 
-const updateColisStatuses = async () => {
-    console.log(`[JOB] Exécution de la mise à jour des statuts de colis...`);
-    const now = new Date();
-    
-    try {
-        // 1. Trouver les colis "enregistrés" liés à des trajets qui ont démarré
-        const colisToStart = await Colis.find({ statut: 'enregistré' })
-            .populate({
-                path: 'trajet',
-                match: { dateDepart: { $lte: now } }
-            });
-
-        for (const colis of colisToStart) {
-            if (colis.trajet) { // La condition de populate assure que seuls ceux avec un trajet démarré sont ici
-                colis.statut = 'encours';
-                await colis.save();
-                console.log(`[JOB] Colis ${colis.code_suivi} mis à "en cours".`);
-                // TODO: Envoyer une notification socket.io à l'expéditeur
-            }
-        }
-
-        // 2. Trouver les colis "en cours" liés à des trajets qui devraient être terminés
-        const colisToFinish = await Colis.find({ statut: 'encours' }).populate('trajet');
-            
-        for (const colis of colisToFinish) {
-            if (colis.trajet && colis.trajet.dateDepart) {
-                const departureTime = new Date(colis.trajet.dateDepart).getTime();
-                // Utiliser une durée fixe (ex: 5h) ou, mieux, une durée stockée sur le trajet
-                const estimatedDurationMs = (colis.trajet.duree_estimee_min || 300) * 60 * 1000; 
-                const estimatedArrivalTime = new Date(departureTime + estimatedDurationMs);
-
-                if (now >= estimatedArrivalTime) {
-                    colis.statut = 'arrivé';
-                    await colis.save();
-                    console.log(`[JOB] Colis ${colis.code_suivi} mis à "arrivé".`);
-                    // TODO: Envoyer une notification socket.io à l'expéditeur ET au destinataire
-                }
-            }
-        }
-    } catch (error) {
-        console.error("[JOB] Erreur lors de la mise à jour des statuts de colis:", error);
-    }
-};
-
-// --- Démarrage du serveur et du job ---
+// --- Démarrage du serveur ---
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`🚀 Serveur démarré (HTTP & WebSocket) sur le port ${PORT}`);
-  // Lancer le job immédiatement au démarrage, puis toutes les 5 minutes
-  updateColisStatuses(); 
-  setInterval(updateColisStatuses, JOB_INTERVAL_MS);
 });
 
 
@@ -136,5 +85,8 @@ app.use((req, res, next) => {
 app.use((err, req, res, next) => {
   const statusCode = res.statusCode === 200 ? 500 : res.statusCode;
   res.status(statusCode);
-  res.json({ message: err.message });
+  res.json({
+    message: err.message,
+    stack: process.env.NODE_ENV === 'production' ? null : err.stack,
+  });
 });
