@@ -1,6 +1,6 @@
 // backend/controllers/trajet.controller.js
 const Trajet = require('../models/trajet.model');
-
+const LiveTrip = require('../models/LiveTrip.model'); 
 /**
  * @desc    Rechercher des trajets pour l'interface publique (avec filtres et pagination)
  * @route   GET /api/public/trajets/search
@@ -104,7 +104,7 @@ exports.createTrajet = async (req, res) => {
  */
 exports.getAllTrajetsAdmin = async (req, res) => {
   try {
-    const { status } = req.query; // ex: 'avenir', 'passes'
+    const { status } = req.query;
     let dateFilter = {};
     const now = new Date();
 
@@ -113,13 +113,26 @@ exports.getAllTrajetsAdmin = async (req, res) => {
     } else if (status === 'passes') {
         dateFilter = { dateDepart: { $lt: now } };
     }
-    // Si aucun statut, on les prend tous
 
     const trajets = await Trajet.find(dateFilter)
         .populate('bus', 'numero etat')
-        .sort({ dateDepart: -1 }); // Les plus récents/prochains en premier
+        .sort({ dateDepart: 1 }) // Trier du plus proche au plus lointain pour 'avenir'
+        .lean(); // Utiliser .lean() pour de meilleures performances
+
+    // --- NOUVELLE LOGIQUE : VÉRIFIER LE STATUT "LIVE" ---
+    const trajetsWithLiveStatus = await Promise.all(
+        trajets.map(async (trajet) => {
+            const liveTrip = await LiveTrip.findOne({ trajetId: trajet._id });
+            return {
+                ...trajet,
+                isLive: !!liveTrip, // Vrai si un LiveTrip existe
+                liveStatus: liveTrip?.status || null // 'En cours', 'Terminé', etc.
+            };
+        })
+    );
+    // ----------------------------------------------------
     
-    res.json(trajets);
+    res.json(trajetsWithLiveStatus);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
