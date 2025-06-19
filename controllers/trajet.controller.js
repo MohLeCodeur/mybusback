@@ -115,22 +115,20 @@ exports.getAllTrajetsAdmin = async (req, res) => {
     }
 
     const trajets = await Trajet.find(dateFilter)
-        .populate('bus', 'numero etat')
-        .sort({ dateDepart: 1 }) // Trier du plus proche au plus lointain pour 'avenir'
-        .lean(); // Utiliser .lean() pour de meilleures performances
+        // --- CORRECTION CRUCIALE ---
+        .populate('bus', 'numero etat') // On peuple bien les infos du bus
+        // -------------------------
+        .lean(); // .lean() pour de meilleures performances
 
-    // --- NOUVELLE LOGIQUE : VÉRIFIER LE STATUT "LIVE" ---
     const trajetsWithLiveStatus = await Promise.all(
         trajets.map(async (trajet) => {
-            const liveTrip = await LiveTrip.findOne({ trajetId: trajet._id });
+            const liveTrip = await LiveTrip.findOne({ trajetId: trajet._id }, 'status').lean();
             return {
                 ...trajet,
-                isLive: !!liveTrip, // Vrai si un LiveTrip existe
-                liveStatus: liveTrip?.status || null // 'En cours', 'Terminé', etc.
+                liveStatus: liveTrip?.status || null
             };
         })
     );
-    // ----------------------------------------------------
     
     res.json(trajetsWithLiveStatus);
   } catch (err) {
