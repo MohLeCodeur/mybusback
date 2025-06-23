@@ -106,19 +106,31 @@ exports.getAllTrajetsAdmin = async (req, res) => {
   try {
     const { status } = req.query;
     let dateFilter = {};
-    const now = new Date();
+
+    // ==========================================================
+    // === DÉBUT DE LA CORRECTION
+    // ==========================================================
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0); // Important: on met l'heure à minuit UTC pour une comparaison juste
+
+    const tomorrow = new Date(today);
+    tomorrow.setUTCDate(today.getUTCDate() + 1); // Le début de la journée de demain
 
     if (status === 'avenir') {
-        dateFilter = { dateDepart: { $gte: now } };
+        // "À venir" inclut tout à partir de minuit aujourd'hui
+        dateFilter = { dateDepart: { $gte: today } };
     } else if (status === 'passes') {
-        dateFilter = { dateDepart: { $lt: now } };
+        // "Passés" inclut tout ce qui est strictement avant minuit aujourd'hui
+        dateFilter = { dateDepart: { $lt: today } };
     }
-
+    // Si status est "tous" ou autre chose, dateFilter reste vide ({}) et on récupère tout.
+    // ==========================================================
+    // === FIN DE LA CORRECTION
+    // ==========================================================
+    
     const trajets = await Trajet.find(dateFilter)
-        // --- CORRECTION CRUCIALE ---
-        .populate('bus', 'numero etat') // On peuple bien les infos du bus
-        // -------------------------
-        .lean(); // .lean() pour de meilleures performances
+        .populate('bus', 'numero etat')
+        .lean();
 
     const trajetsWithLiveStatus = await Promise.all(
         trajets.map(async (trajet) => {
@@ -130,6 +142,14 @@ exports.getAllTrajetsAdmin = async (req, res) => {
         })
     );
     
+    // On trie les résultats ici, pour que ce soit cohérent
+    trajetsWithLiveStatus.sort((a, b) => {
+      const dateA = new Date(a.dateDepart);
+      const dateB = new Date(b.dateDepart);
+      // Pour les trajets passés, on veut les plus récents en premier. Pour les futurs, les plus proches.
+      return status === 'passes' ? dateB - dateA : dateA - dateB;
+    });
+
     res.json(trajetsWithLiveStatus);
   } catch (err) {
     res.status(500).json({ message: err.message });
