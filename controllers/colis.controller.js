@@ -66,13 +66,29 @@ exports.getColisById = async (req, res) => {
   }
 };
 
-// Nouvelle méthode : récupérer un colis via son code de suivi
 exports.getColisByCode = async (req, res) => {
   try {
     const { code } = req.params;
-    const colis = await Colis.findOne({ code_suivi: code });
-    if (!colis) return res.status(404).json({ message: "Colis non trouvé" });
+    
+    // --- LIGNE MODIFIÉE ET RENDUE PLUS ROBUSTE ---
+    // On utilise la syntaxe objet pour .populate() pour spécifier exactement
+    // les champs du trajet que nous voulons récupérer. C'est une meilleure pratique.
+    const colis = await Colis.findOne({ code_suivi: code })
+      .populate({
+        path: 'trajet',
+        select: 'villeDepart villeArrivee dateDepart compagnie' // On liste les champs nécessaires
+      });
+    // ---------------------------------------------------
+
+    if (!colis) {
+      return res.status(404).json({ message: "Colis non trouvé" });
+    }
+
+    // Log de débogage côté serveur pour être sûr de ce qu'on envoie
+    console.log("Données du colis envoyées au front :", JSON.stringify(colis, null, 2));
+    
     return res.json(colis);
+
   } catch (err) {
     console.error("Erreur getColisByCode :", err);
     return res.status(500).json({ message: err.message });
