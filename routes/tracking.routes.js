@@ -1,27 +1,29 @@
-// backend/routes/tracking.routes.js
+// mybusback/routes/tracking.routes.js (CODE CORRIGÉ)
+
 const express = require('express');
 const router = express.Router();
+const axios = require('axios'); // <--- 1. AJOUTER CETTE LIGNE
 const { protect, isAdmin } = require('../middlewares/auth.middleware');
 const { 
     startTrip, 
     updateBusPosition, 
     getMyNextTrip,
-    getLiveTripById // <-- Importer la nouvelle fonction
+    getLiveTripById
 } = require('../controllers/tracking.controller');
 
 // Route pour qu'un client récupère son prochain voyage (protégée par login)
 router.get('/my-next-trip', protect, getMyNextTrip);
 
-// --- NOUVELLE ROUTE ---
 // Route pour récupérer les détails d'un voyage en direct par son ID
 router.get('/live/:liveTripId', protect, getLiveTripById);
-// --------------------
 
 // Route pour qu'un admin démarre un voyage
 router.post('/start-trip', protect, isAdmin, startTrip);
 
 // Route pour mettre à jour la position d'un bus
 router.post('/live/:liveTripId/update-position', protect, isAdmin, updateBusPosition);
+
+// --- 2. LE RESTE DE LA ROUTE EST MAINTENANT CORRECT ---
 router.post('/calculate-route', protect, async (req, res) => {
     try {
         const { pointA, pointB } = req.body;
@@ -49,7 +51,7 @@ router.post('/calculate-route', protect, async (req, res) => {
         res.json({
             distanceKm: (summary.distance / 1000).toFixed(2),
             durationMin: Math.round(summary.duration / 60),
-            geojson: feature.geometry, // On ne renvoie que la géométrie
+            geojson: feature.geometry,
             instructions: steps,
         });
 
