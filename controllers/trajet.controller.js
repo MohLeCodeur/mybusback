@@ -76,7 +76,38 @@ exports.getTrajetByIdPublic = async (req, res) => {
         res.status(500).json({ message: "Erreur serveur." });
     }
 };
+// ==========================================================
+// === NOUVELLE FONCTION POUR ANNULER UN TRAJET
+// ==========================================================
+/**
+ * @desc    Annuler un trajet (le rend inactif et met à jour le LiveTrip si besoin)
+ * @route   PUT /api/admin/trajets/:id/cancel
+ * @access  Admin
+ */
+exports.cancelTrajet = async (req, res) => {
+  try {
+    const trajet = await Trajet.findByIdAndUpdate(
+      req.params.id, 
+      { isActive: false }, 
+      { new: true }
+    );
 
+    if (!trajet) {
+      return res.status(404).json({ message: "Trajet non trouvé" });
+    }
+
+    // On met aussi à jour le LiveTrip associé, s'il existe, pour le marquer comme "Annulé"
+    await LiveTrip.findOneAndUpdate(
+        { trajetId: req.params.id },
+        { status: 'Annulé' }
+    );
+
+    res.json({ message: "Trajet annulé avec succès.", trajet });
+  } catch (err) {
+    console.error("Erreur cancelTrajet:", err);
+    res.status(500).json({ message: "Erreur serveur lors de l'annulation du trajet." });
+  }
+};
 /**
  * @desc    Créer un nouveau trajet
  * @route   POST /api/admin/trajets
