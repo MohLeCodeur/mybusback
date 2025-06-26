@@ -1,94 +1,81 @@
 // backend/controllers/dashboard.controller.js
 const mongoose = require('mongoose');
-const axios = require('axios');
 const Reservation = require('../models/reservation.model');
-const LiveTrip = require('../models/LiveTrip.model');
 const Colis = require('../models/colis.model');
-const Trajet = require('../models/trajet.model');
 
-// ... (la fonction calculateORS_Route reste inchangée)
-async function calculateORS_Route(startCoords, endCoords) { /* ... code inchangé ... */ }
-
+// La fonction utilitaire `calculateORS_Route` reste inchangée.
 
 exports.getClientDashboardData = async (req, res) => {
     try {
         const now = new Date();
         const clientId = req.user._id;
 
-        // ==========================================================
-        // === DÉBUT DE LA CORRECTION : UTILISATION D'UNE AGRÉGATION
-        // ==========================================================
-        const aggregationPipeline = [
-            // 1. Filtrer les réservations de l'utilisateur
+        // L'agrégation pour récupérer toutes les données reste la même, elle est très efficace.
+        const allReservations = await Reservation.aggregate([
             { $match: { client: new mongoose.Types.ObjectId(clientId), statut: 'confirmée' } },
-            // 2. Joindre les informations du trajet
-            { $lookup: {
-                from: 'trajets',
-                localField: 'trajet',
-                foreignField: '_id',
-                as: 'trajet'
-            }},
-            { $unwind: '$trajet' }, // Dénormaliser le tableau de trajet
-            // 3. Joindre les informations du live trip (si elles existent)
-            { $lookup: {
-                from: 'livetrips', // Nom de la collection MongoDB pour LiveTrip
-                localField: 'trajet._id',
-                foreignField: 'trajetId',
-                as: 'liveTrip'
-            }},
-            // 4. Formatter le champ liveTrip pour être un objet ou null
-            { $addFields: {
-                liveTrip: { $arrayElemAt: ['$liveTrip', 0] }
-            }},
-            // 5. Joindre les informations du bus
-            { $lookup: {
-                from: 'bus', // Nom de la collection MongoDB pour Bus
-                localField: 'trajet.bus',
-                foreignField: '_id',
-                as: 'trajet.bus'
-            }},
+            { $lookup: { from: 'trajets', localField: 'trajet', foreignField: '_id', as: 'trajet' }},
+            { $unwind: '$trajet' },
+            { $lookup: { from: 'livetrips', localField: 'trajet._id', foreignField: 'trajetId', as: 'liveTrip' }},
+            { $addFields: { liveTrip: { $arrayElemAt: ['$liveTrip', 0] } }},
+            { $lookup: { from: 'bus', localField: 'trajet.bus', foreignField: '_id', as: 'trajet.bus' }},
             { $unwind: { path: '$trajet.bus', preserveNullAndEmptyArrays: true } },
-            // 6. Trier par date de départ
-            { $sort: { 'trajet.dateDepart': 1 } }
-        ];
+            { $sort: { 'trajet.dateDepart': 1, 'trajet.heureDepart': 1 } } // Tri par date ET heure
+        ]);
 
-        const allReservations = await Reservation.aggregate(aggregationPipeline);
         // ==========================================================
-        // === FIN DE LA CORRECTION
+        // === DÉBUT DE LA NOUVELLE LOGIQUE DE SÉLECTION
         // ==========================================================
 
         let tripToDisplay = null;
-        const upcomingTrips = [];
-        const pastTrips = [];
+        let upcomingTrips = [];
+        let pastTrips = [];
+        let activeTrip = null;
 
+        // 1. On classe d'abord tous les voyages et on trouve un voyage actif
         for (const r of allReservations) {
             if (!r.trajet) continue;
             
             const departureDateTime = new Date(`${new Date(r.trajet.dateDepart).toISOString().split('T')[0]}T${r.trajet.heureDepart}:00Z`);
-            const trackingWindowEnd = new Date(departureDateTime.getTime() + (12 * 60 * 60 * 1000));
             
-            if (now < departureDateTime) {
+            if (departureDateTime > now) {
                 upcomingTrips.push(r);
-            } else if (now >= departureDateTime && now <= trackingWindowEnd) {
-                if (!tripToDisplay) tripToDisplay = r;
-                pastTrips.push(r);
             } else {
                 pastTrips.push(r);
+                // Si on trouve un voyage en cours, on le met de côté
+                if (r.liveTrip && r.liveTrip.status === 'En cours') {
+                    activeTrip = r;
+                }
             }
         }
-        
-        if (!tripToDisplay && upcomingTrips.length > 0) {
-            tripToDisplay = upcomingTrips.shift();
+
+        // 2. On applique la logique de priorité pour choisir le voyage à afficher
+        if (activeTrip) {
+            // Priorité 1: Un voyage est activement suivi.
+            tripToDisplay = activeTrip;
+        } else if (upcomingTrips.length > 0) {
+            // Priorité 2: Il n'y a pas de voyage actif, on prend le prochain à venir.
+            tripToDisplay = upcomingTrips[0];
+        } else if (pastTrips.length > 0) {
+            // Priorité 3 (Fallback): Aucun voyage actif ou à venir, on montre le plus récent.
+            tripToDisplay = pastTrips[pastTrips.length - 1]; // Le dernier du tableau trié par date
         }
         
-        // La donnée liveTrip est maintenant directement dans l'objet tripToDisplay
+        // 3. On s'assure que le voyage affiché n'est pas dupliqué dans les listes
+        if (tripToDisplay) {
+            upcomingTrips = upcomingTrips.filter(t => t._id.toString() !== tripToDisplay._id.toString());
+            pastTrips = pastTrips.filter(t => t._id.toString() !== tripToDisplay._id.toString());
+        }
+
+        // ==========================================================
+        // === FIN DE LA NOUVELLE LOGIQUE DE SÉLECTION
+        // ==========================================================
+        
         const userColis = await Colis.find({ expediteur_email: req.user.email }).sort({ date_enregistrement: -1 }).limit(5);
 
         res.json({
-            // On renvoie l'objet complet qui contient déjà la réservation et le liveTrip
-            tripToDisplay: tripToDisplay,
+            tripToDisplay,
             upcomingTrips,
-            pastTrips: pastTrips.reverse(),
+            pastTrips: pastTrips.reverse(), // On inverse pour avoir les plus récents en premier
             colis: userColis,
         });
 
