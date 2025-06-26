@@ -100,10 +100,3 @@ exports.profilClient = async (req, res) => {
   });
 };
 
-// La fonction inscrireClientAdmin n'est plus nécessaire si la logique ci-dessus est adoptée
-// Vous pouvez la commenter ou la supprimer
-/*
-exports.inscrireClientAdmin = async (req, res) => {
-  // ... (ancien code)
-};
-*/

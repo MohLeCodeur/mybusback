@@ -105,30 +105,24 @@ exports.createTrajet = async (req, res) => {
 exports.getAllTrajetsAdmin = async (req, res) => {
   try {
     const { status } = req.query;
-    let dateFilter = {};
+    let queryFilter = {};
 
     // ==========================================================
-    // === DÉBUT DE LA CORRECTION
+    // === DÉBUT DE LA LOGIQUE DE FILTRAGE MODIFIÉE
     // ==========================================================
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0); // Important: on met l'heure à minuit UTC pour une comparaison juste
-
-    const tomorrow = new Date(today);
-    tomorrow.setUTCDate(today.getUTCDate() + 1); // Le début de la journée de demain
-
     if (status === 'avenir') {
-        // "À venir" inclut tout à partir de minuit aujourd'hui
-        dateFilter = { dateDepart: { $gte: today } };
+        // "À venir" sont tous les trajets qui ne sont ni "En cours" ni "Terminé"
+        queryFilter.etatVoyage = 'Non commencé';
     } else if (status === 'passes') {
-        // "Passés" inclut tout ce qui est strictement avant minuit aujourd'hui
-        dateFilter = { dateDepart: { $lt: today } };
+        // "Passés" sont uniquement les trajets marqués comme "Terminé"
+        queryFilter.etatVoyage = 'Terminé';
     }
-    // Si status est "tous" ou autre chose, dateFilter reste vide ({}) et on récupère tout.
+    // Si status est "tous" ou autre, on récupère tout
     // ==========================================================
-    // === FIN DE LA CORRECTION
+    // === FIN DE LA LOGIQUE DE FILTRAGE
     // ==========================================================
     
-    const trajets = await Trajet.find(dateFilter)
+    const trajets = await Trajet.find(queryFilter)
         .populate('bus', 'numero etat')
         .lean();
 
@@ -142,11 +136,9 @@ exports.getAllTrajetsAdmin = async (req, res) => {
         })
     );
     
-    // On trie les résultats ici, pour que ce soit cohérent
     trajetsWithLiveStatus.sort((a, b) => {
       const dateA = new Date(a.dateDepart);
       const dateB = new Date(b.dateDepart);
-      // Pour les trajets passés, on veut les plus récents en premier. Pour les futurs, les plus proches.
       return status === 'passes' ? dateB - dateA : dateA - dateB;
     });
 
@@ -154,6 +146,118 @@ exports.getAllTrajetsAdmin = async (req, res) => {
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
+};
+
+// ==========================================================
+// === NOUVELLES FONCTIONS POUR LA GESTION MANUELLE
+// ==========================================================
+
+/**
+ * @desc    Pour un admin, démarrer le suivi d'un voyage.
+ * @route   POST /api/admin/trajets/:id/demarrer
+ * @access  Admin
+ */
+exports.demarrerTrajet = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const trajet = await Trajet.findById(id).populate('bus');
+
+        if (!trajet) return res.status(404).json({ message: "Trajet non trouvé" });
+        if (trajet.etatVoyage !== 'Non commencé') return res.status(400).json({ message: `Le voyage est déjà "${trajet.etatVoyage}"`});
+        if (!trajet.bus) return res.status(400).json({ message: "Aucun bus n'est assigné à ce trajet." });
+        if (!trajet.coordsDepart?.lat || !trajet.coordsArrivee?.lat) {
+            return res.status(400).json({ message: "Les coordonnées GPS sont manquantes." });
+        }
+
+        let liveTrip = await LiveTrip.findOne({ trajetId: id });
+        if (!liveTrip) {
+            const routeData = await calculateORS_Route(trajet.coordsDepart, trajet.coordsArrivee);
+            liveTrip = new LiveTrip({
+                trajetId: trajet._id, busId: trajet.bus._id,
+                originCityName: trajet.villeDepart, destinationCityName: trajet.villeArrivee,
+                departureDateTime: trajet.dateDepart,
+                routeGeoJSON: routeData.geojson,
+                routeInstructions: routeData.instructions,
+                routeSummary: routeData.summary,
+                currentPosition: trajet.coordsDepart
+            });
+        }
+        
+        liveTrip.status = 'En cours';
+        liveTrip.lastUpdated = new Date();
+        await liveTrip.save();
+        
+        // Mettre à jour l'état du trajet principal
+        trajet.etatVoyage = 'En cours';
+        await trajet.save();
+
+        // Logique de notification
+        const reservations = await Reservation.find({ trajet: trajet._id, statut: 'confirmée' });
+        reservations.forEach(r => {
+            const recipientSocketId = req.onlineUsers[r.client.toString()];
+            if (recipientSocketId) {
+                req.io.to(recipientSocketId).emit("getNotification", {
+                    title: "Votre voyage a commencé !",
+                    message: `Le suivi pour le trajet ${trajet.villeDepart} → ${trajet.villeArrivee} est actif.`,
+                    link: `/tracking/map/${liveTrip._id}`
+                });
+            }
+        });
+        
+        res.status(200).json({ message: "Le voyage a démarré avec succès.", trajet });
+    } catch (err) {
+        console.error("Erreur demarrerTrajet:", err.message);
+        res.status(500).json({ message: "Erreur interne du serveur." });
+    }
+};
+
+/**
+ * @desc    Marquer un voyage comme terminé.
+ * @route   POST /api/admin/trajets/:id/terminer
+ * @access  Admin
+ */
+exports.terminerTrajet = async (req, res) => {
+    try {
+        const trajet = await Trajet.findByIdAndUpdate(req.params.id, { etatVoyage: 'Terminé' }, { new: true });
+        if (!trajet) return res.status(404).json({ message: "Trajet non trouvé." });
+
+        await LiveTrip.findOneAndUpdate({ trajetId: req.params.id }, { status: 'Terminé' });
+
+        res.json({ message: "Voyage marqué comme terminé.", trajet });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+};
+
+/**
+ * @desc    Notifier les passagers d'un retard.
+ * @route   POST /api/admin/trajets/:id/notifier-retard
+ * @access  Admin
+ */
+exports.notifierRetard = async (req, res) => {
+    try {
+        const trajet = await Trajet.findById(req.params.id);
+        if (!trajet) return res.status(404).json({ message: "Trajet non trouvé." });
+
+        const reservations = await Reservation.find({ trajet: trajet._id, statut: 'confirmée' });
+        let notificationCount = 0;
+
+        reservations.forEach(r => {
+            const recipientSocketId = req.onlineUsers[r.client.toString()];
+            if (recipientSocketId) {
+                req.io.to(recipientSocketId).emit("getNotification", {
+                    title: "Information sur votre voyage",
+                    message: `Le départ du trajet ${trajet.villeDepart} → ${trajet.villeArrivee} est retardé. Nous vous remercions de votre patience.`,
+                    link: `/dashboard` 
+                });
+                notificationCount++;
+            }
+        });
+
+        res.json({ message: `${notificationCount} passager(s) ont été notifiés du retard.` });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
 };
 
 /**
@@ -179,7 +283,7 @@ exports.updateTrajet = async (req, res) => {
 /**
  * @desc    Supprimer un trajet
  * @route   DELETE /api/admin/trajets/:id
- * @access  Admin
+ * @access  AdmingetAllTrajetsAdmi
  */
 exports.deleteTrajet = async (req, res) => {
   try {
