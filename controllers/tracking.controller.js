@@ -53,19 +53,28 @@ exports.startTrip = async (req, res) => {
         liveTrip.status = 'En cours';
         liveTrip.lastUpdated = new Date();
         await liveTrip.save();
-
+        
+        // ==========================================================
+        // === DÉBUT DE LA CORRECTION : NOTIFICATION ET MISE À JOUR D'ÉTAT
+        // ==========================================================
         const reservations = await Reservation.find({ trajet: trajet._id, statut: 'confirmée' }).populate('client', '_id');
         reservations.forEach(r => {
             if (!r.client) return;
             const recipientSocketId = req.onlineUsers[r.client._id.toString()];
             if (recipientSocketId) {
+                // 1. Envoyer la notification de démarrage
                 req.io.to(recipientSocketId).emit("getNotification", {
                     title: "Votre voyage a commencé !",
                     message: `Le suivi pour ${trajet.villeDepart} → ${trajet.villeArrivee} est actif.`,
                     link: `/tracking/map/${liveTrip._id}`
                 });
+                // 2. Envoyer l'événement de mise à jour d'état pour forcer le rafraîchissement
+                req.io.to(recipientSocketId).emit("tripStateChanged", { trajetId: trajet._id });
             }
         });
+        // ==========================================================
+        // === FIN DE LA CORRECTION
+        // ==========================================================
         
         res.status(200).json({ message: "Le voyage a démarré avec succès.", liveTrip });
     } catch (err) {
@@ -86,35 +95,36 @@ exports.endTrip = async (req, res) => {
     try {
         const { liveTripId } = req.params;
         const liveTrip = await LiveTrip.findById(liveTripId).populate('trajetId');
-
-        if (!liveTrip) {
-            return res.status(404).json({ message: "Voyage en cours non trouvé." });
-        }
+        if (!liveTrip) return res.status(404).json({ message: "Voyage en cours non trouvé." });
         
         liveTrip.status = 'Terminé';
         liveTrip.lastUpdated = new Date();
-        // Optionnel : Mettre la position du bus sur les coordonnées d'arrivée
         if (liveTrip.trajetId && liveTrip.trajetId.coordsArrivee) {
             liveTrip.currentPosition = liveTrip.trajetId.coordsArrivee;
         }
         await liveTrip.save();
 
-        // Envoyer une notification d'arrivée aux passagers
-        const reservations = await Reservation.find({ trajet: liveTrip.trajetId, statut: 'confirmée' }).populate('client', '_id');
+        // ==========================================================
+        // === DÉBUT DE LA CORRECTION : NOTIFICATION ET MISE À JOUR D'ÉTAT
+        // ==========================================================
+        const reservations = await Reservation.find({ trajet: liveTrip.trajetId._id, statut: 'confirmée' }).populate('client', '_id');
         reservations.forEach(r => {
             if (!r.client) return;
             const recipientSocketId = req.onlineUsers[r.client._id.toString()];
             if (recipientSocketId) {
                 req.io.to(recipientSocketId).emit("getNotification", {
                     title: "Votre voyage est terminé !",
-                    message: `Le bus pour ${liveTrip.originCityName} → ${liveTrip.destinationCityName} est arrivé à destination.`,
+                    message: `Le bus pour ${liveTrip.originCityName} → ${liveTrip.destinationCityName} est arrivé.`,
                     link: `/dashboard`
                 });
+                req.io.to(recipientSocketId).emit("tripStateChanged", { trajetId: liveTrip.trajetId._id });
             }
         });
+        // ==========================================================
+        // === FIN DE LA CORRECTION
+        // ==========================================================
 
         res.status(200).json({ message: "Le voyage a été marqué comme terminé." });
-
     } catch (err) {
         console.error("Erreur endTrip:", err.message);
         res.status(500).json({ message: "Erreur interne du serveur." });
