@@ -1,103 +1,150 @@
 // backend/controllers/stats.controller.js
 const Reservation = require("../models/reservation.model");
 const Colis = require("../models/colis.model");
+const Client = require("../models/client.model");
+const Trajet = require("../models/trajet.model");
+const mongoose = require('mongoose');
 
-// GET /api/admin/stats/revenus?periode=weekly|monthly
+// --- FONCTION DE REVENUS AMÉLIORÉE ---
 exports.getRevenus = async (req, res) => {
   try {
-    const periode = req.query.periode === "monthly" ? "monthly" : "weekly";
-    let dateFilter = {};
+    const periode = req.query.periode || 'weekly'; // 'daily', 'weekly', 'monthly', 'yearly'
+    const now = new Date();
+    let startDate;
 
-    // Définir la plage de dates
-    if (periode === "weekly") {
-      const startDate = new Date();
-      startDate.setDate(startDate.getDate() - 7);
-      startDate.setHours(0, 0, 0, 0);
-      dateFilter = { $gte: startDate };
-    } else { // monthly
-      const startDate = new Date();
-      startDate.setMonth(startDate.getMonth() - 12);
-      startDate.setDate(1);
-      startDate.setHours(0, 0, 0, 0);
-      dateFilter = { $gte: startDate };
+    switch (periode) {
+        case 'daily':
+            startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            break;
+        case 'monthly':
+            startDate = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate());
+            break;
+        case 'yearly':
+            startDate = new Date(now.getFullYear(), 0, 1);
+            break;
+        case 'weekly':
+        default:
+            startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6);
+            break;
     }
+    startDate.setHours(0, 0, 0, 0);
 
-    // --- 1. Agrégation pour les revenus des Réservations ---
+    const dateFilter = { $gte: startDate };
+
+    // --- Agrégations en parallèle ---
     const reservationsPromise = Reservation.aggregate([
-      { $match: { statut: 'confirmée', dateReservation: dateFilter } },
-      { $lookup: { from: "trajets", localField: "trajet", foreignField: "_id", as: "trajetInfo" } },
-      { $unwind: "$trajetInfo" },
-      { $project: {
-          date: "$dateReservation",
-          revenue: { $multiply: ["$trajetInfo.prix", "$placesReservees"] }
-      }}
+        { $match: { statut: 'confirmée', dateReservation: dateFilter } },
+        { $lookup: { from: "trajets", localField: "trajet", foreignField: "_id", as: "trajetInfo" } },
+        { $unwind: "$trajetInfo" },
+        { $project: { date: "$dateReservation", revenue: { $multiply: ["$trajetInfo.prix", "$placesReservees"] }, count: 1 } }
     ]);
-
-    // --- 2. Agrégation pour les revenus des Colis ---
-    // (On suppose que tous les colis enregistrés représentent un revenu)
     const colisPromise = Colis.aggregate([
         { $match: { date_enregistrement: dateFilter } },
-        { $project: {
-            date: "$date_enregistrement",
-            revenue: "$prix"
-        }}
+        { $project: { date: "$date_enregistrement", revenue: "$prix", count: 1 } }
     ]);
+    const newUsersPromise = Client.countDocuments({ createdAt: dateFilter });
 
-    // Exécuter les deux agrégations en parallèle
-    const [reservationRevenues, colisRevenues] = await Promise.all([reservationsPromise, colisPromise]);
+    const [reservationData, colisData, newUsersCount] = await Promise.all([reservationsPromise, colisPromise, newUsersPromise]);
 
-    // --- 3. Combiner et calculer les statistiques ---
+    // --- Calcul des KPIs ---
+    const totalRevenueBillets = reservationData.reduce((sum, item) => sum + item.revenue, 0);
+    const totalRevenueColis = colisData.reduce((sum, item) => sum + item.revenue, 0);
+    const summary = {
+        totalRevenue: totalRevenueBillets + totalRevenueColis,
+        totalRevenueBillets,
+        totalRevenueColis,
+        totalReservations: reservationData.length,
+        totalColis: colisData.length,
+        newUsersCount
+    };
+
+    // --- Préparation des données pour le graphique ---
     const allTransactions = [
-        ...reservationRevenues.map(r => ({ ...r, type: 'Billet' })),
-        ...colisRevenues.map(c => ({ ...c, type: 'Colis' }))
+        ...reservationData.map(r => ({ ...r, type: 'billets' })),
+        ...colisData.map(c => ({ ...c, type: 'colis' }))
     ];
 
-    const totalRevenue = allTransactions.reduce((sum, item) => sum + (item.revenue || 0), 0);
-    const totalRevenueBillets = reservationRevenues.reduce((sum, item) => sum + (item.revenue || 0), 0);
-    const totalRevenueColis = colisRevenues.reduce((sum, item) => sum + (item.revenue || 0), 0);
-    
-    // --- 4. Préparer les données pour le graphique ---
     const groupedForChart = allTransactions.reduce((acc, item) => {
         const date = new Date(item.date);
         let key;
-        if (periode === 'weekly') {
-            key = `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}`;
+        if (periode === 'yearly') {
+            key = date.toLocaleString('fr-FR', { month: 'short' });
         } else {
-            key = `${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear()}`;
+            key = date.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
         }
         
-        if (!acc[key]) {
-            acc[key] = { label: key, billets: 0, colis: 0 };
-        }
-        
-        if(item.type === 'Billet') {
-            acc[key].billets += item.revenue;
-        } else if (item.type === 'Colis') {
-            acc[key].colis += item.revenue;
-        }
+        if (!acc[key]) acc[key] = { label: key, dateObj: date, billets: 0, colis: 0 };
+        acc[key][item.type] += item.revenue;
         
         return acc;
     }, {});
+    
+    // Trier par date pour assurer la cohérence du graphique
+    const chartData = Object.values(groupedForChart).sort((a,b) => a.dateObj - b.dateObj);
 
-    const chartData = Object.values(groupedForChart).sort((a,b) => {
-        const dateA = new Date(a.label.split('/').reverse().join('-'));
-        const dateB = new Date(b.label.split('/').reverse().join('-'));
-        return dateA - dateB;
-    });
-
-    // Renvoyer l'objet structuré complet
-    return res.json({
-      summary: {
-        totalRevenue,
-        totalRevenueBillets,
-        totalRevenueColis,
-        totalTransactions: allTransactions.length,
-      },
-      chartData,
-    });
+    return res.json({ summary, chartData });
     
   } catch (err) {
     console.error("Erreur de calcul des statistiques de revenus:", err);
-    return res.status(500).json({ message: err.message });
+    return res.status(500).json({ message: "Erreur de calcul des statistiques de revenus." });
   }
+};
+
+
+// --- NOUVELLE FONCTION POUR LES INSIGHTS DE PERFORMANCE ---
+exports.getPerformanceInsights = async (req, res) => {
+    try {
+        const periode = req.query.periode || 'monthly';
+        const now = new Date();
+        let startDate;
+
+        switch (periode) {
+            case 'daily': startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate()); break;
+            case 'yearly': startDate = new Date(now.getFullYear(), 0, 1); break;
+            case 'weekly': startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6); break;
+            case 'monthly': default: startDate = new Date(now.getFullYear(), now.getMonth() - 1, now.getDate()); break;
+        }
+        startDate.setHours(0, 0, 0, 0);
+        const dateFilter = { $gte: startDate };
+
+        // Agrégation pour les trajets les plus rentables
+        const topRoutesPromise = Reservation.aggregate([
+            { $match: { statut: 'confirmée', dateReservation: dateFilter } },
+            { $lookup: { from: 'trajets', localField: 'trajet', foreignField: '_id', as: 'trajetInfo' } },
+            { $unwind: '$trajetInfo' },
+            { $group: {
+                _id: '$trajet',
+                villeDepart: { $first: '$trajetInfo.villeDepart' },
+                villeArrivee: { $first: '$trajetInfo.villeArrivee' },
+                totalRevenue: { $sum: { $multiply: ['$trajetInfo.prix', '$placesReservees'] } },
+                reservationCount: { $sum: 1 }
+            }},
+            { $sort: { totalRevenue: -1 } },
+            { $limit: 5 },
+            { $project: { _id: 0, route: { $concat: ['$villeDepart', ' → ', '$villeArrivee'] }, totalRevenue: 1, reservationCount: 1 } }
+        ]);
+
+        // Agrégation pour les compagnies les plus performantes
+        const topCompaniesPromise = Reservation.aggregate([
+            { $match: { statut: 'confirmée', dateReservation: dateFilter } },
+            { $lookup: { from: 'trajets', localField: 'trajet', foreignField: '_id', as: 'trajetInfo' } },
+            { $unwind: '$trajetInfo' },
+            { $group: {
+                _id: '$trajetInfo.compagnie',
+                totalRevenue: { $sum: { $multiply: ['$trajetInfo.prix', '$placesReservees'] } },
+                reservationCount: { $sum: 1 }
+            }},
+            { $sort: { totalRevenue: -1 } },
+            { $limit: 5 },
+            { $project: { _id: 0, company: '$_id', totalRevenue: 1, reservationCount: 1 } }
+        ]);
+
+        const [topRoutes, topCompanies] = await Promise.all([topRoutesPromise, topCompaniesPromise]);
+
+        res.json({ topRoutes, topCompanies });
+
+    } catch (err) {
+        console.error("Erreur de calcul des insights de performance:", err);
+        res.status(500).json({ message: "Erreur de calcul des insights de performance." });
+    }
 };
