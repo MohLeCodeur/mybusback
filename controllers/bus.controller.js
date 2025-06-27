@@ -116,6 +116,21 @@ exports.getBusById = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
+/**
+ * @desc    Récupérer tous les bus disponibles (non paginé) pour les listes déroulantes.
+ * @route   GET /api/admin/bus/available
+ * @access  Admin
+ */
+exports.getAvailableBuses = async (req, res) => {
+    try {
+        // On récupère tous les bus, en triant par numéro pour un affichage logique
+        const buses = await Bus.find({}).sort({ numero: 1 });
+        res.json(buses);
+    } catch (err) {
+        console.error("Erreur [getAvailableBuses]:", err);
+        res.status(500).json({ message: "Erreur serveur lors de la récupération des bus disponibles." });
+    }
+};
 
 /**
  * @desc    Mettre à jour un bus
