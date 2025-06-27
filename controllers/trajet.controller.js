@@ -1,39 +1,116 @@
 // backend/controllers/trajet.controller.js
 const Trajet = require('../models/trajet.model');
 const LiveTrip = require('../models/LiveTrip.model'); 
+const mongoose = require('mongoose');
 
-// ====================================================================
-// --- DÉBUT DE LA CORRECTION : NOUVELLE FONCTION AJOUTÉE ---
-// ====================================================================
-
+// --- FONCTION ENTIÈREMENT REVUE ---
 /**
- * @desc    Récupérer tous les trajets futurs et actifs pour les formulaires admin (ex: colis).
- *          Cette route n'est pas paginée.
- * @route   GET /api/admin/trajets/available-for-colis
+ * @desc    Récupérer tous les trajets pour le tableau de bord admin, avec filtres et tri.
+ * @route   GET /api/admin/trajets
  * @access  Admin
  */
-exports.getAvailableTrajetsForColis = async (req, res) => {
+exports.getAllTrajetsAdmin = async (req, res) => {
   try {
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0); // Début de la journée actuelle en UTC
+    const { status = 'avenir', search = '', sortBy = 'date_asc', page = 1, limit = 8 } = req.query;
 
-    const trajetsDisponibles = await Trajet.find({
-      isActive: true, // Doit être un trajet actif
-      dateDepart: { $gte: today } // Doit être aujourd'hui ou dans le futur
-    }).sort({ dateDepart: 1 }); // Trié par date de départ
+    let queryFilter = {};
 
-    res.json(trajetsDisponibles);
+    // 1. Filtrer par recherche textuelle (villeDepart, villeArrivee, compagnie)
+    if (search) {
+        queryFilter.$or = [
+            { villeDepart: { $regex: search, $options: 'i' } },
+            { villeArrivee: { $regex: search, $options: 'i' } },
+            { compagnie: { $regex: search, $options: 'i' } }
+        ];
+    }
+    
+    // 2. Pré-filtrage des trajets basé sur le statut liveTrip
+    const liveTrips = await LiveTrip.find({}).lean();
+    const liveTripMap = new Map(liveTrips.map(lt => [lt.trajetId.toString(), lt]));
+
+    const allTrajets = await Trajet.find(queryFilter).populate('bus', 'numero etat').lean();
+    
+    let filteredTrajets = [];
+    
+    // 3. Appliquer la logique de statut
+    allTrajets.forEach(trajet => {
+        const liveTrip = liveTripMap.get(trajet._id.toString());
+        const trajetWithLiveTrip = { ...trajet, liveTrip };
+        
+        switch (status) {
+            case 'avenir':
+                if (!liveTrip || liveTrip.status === 'À venir') {
+                    filteredTrajets.push(trajetWithLiveTrip);
+                }
+                break;
+            case 'encours':
+                if (liveTrip && liveTrip.status === 'En cours') {
+                    filteredTrajets.push(trajetWithLiveTrip);
+                }
+                break;
+            case 'passes':
+                if (!trajet.isActive || (liveTrip && ['Terminé', 'Annulé'].includes(liveTrip.status))) {
+                    filteredTrajets.push(trajetWithLiveTrip);
+                }
+                break;
+            case 'tous':
+            default:
+                filteredTrajets.push(trajetWithLiveTrip);
+                break;
+        }
+    });
+    
+    // 4. Appliquer le tri
+    filteredTrajets.sort((a, b) => {
+        const dateA = new Date(a.dateDepart);
+        const dateB = new Date(b.dateDepart);
+        switch (sortBy) {
+            case 'price_asc': return a.prix - b.prix;
+            case 'price_desc': return b.prix - a.prix;
+            case 'date_desc': return dateB - dateA;
+            case 'date_asc':
+            default: return dateA - dateB;
+        }
+    });
+
+    // 5. Appliquer la pagination
+    const total = filteredTrajets.length;
+    const paginatedTrajets = filteredTrajets.slice((page - 1) * limit, page * limit);
+
+    res.json({
+        docs: paginatedTrajets,
+        total,
+        page: parseInt(page),
+        pages: Math.ceil(total / limit)
+    });
 
   } catch (err) {
-    console.error("Erreur [getAvailableTrajetsForColis]:", err);
-    res.status(500).json({ message: "Erreur serveur lors de la récupération des trajets disponibles." });
+    console.error("Erreur getAllTrajetsAdmin:", err);
+    res.status(500).json({ message: err.message });
   }
 };
 
-// ====================================================================
-// --- FIN DE LA CORRECTION ---
-// ====================================================================
 
+// Le reste des fonctions (create, update, delete, etc.) reste inchangé.
+// Vous n'avez besoin que de remplacer la fonction getAllTrajetsAdmin ci-dessus.
+
+/**
+ * @desc    Récupérer les détails d'un seul trajet pour l'interface publique
+ * @route   GET /api/public/trajets/:id
+ * @access  Public
+ */
+exports.getTrajetByIdPublic = async (req, res) => {
+    try {
+        const trajet = await Trajet.findById(req.params.id).populate('bus');
+        if (!trajet) {
+          return res.status(404).json({ message: 'Trajet non trouvé' });
+        }
+        res.json(trajet);
+    } catch (err) {
+        console.error("Erreur [getTrajetByIdPublic]:", err);
+        res.status(500).json({ message: "Erreur serveur." });
+    }
+};
 
 /**
  * @desc    Rechercher des trajets pour l'interface publique (avec filtres et pagination)
@@ -92,31 +169,24 @@ exports.searchTrajets = async (req, res) => {
 };
 
 
-/**
- * @desc    Récupérer les détails d'un seul trajet pour l'interface publique
- * @route   GET /api/public/trajets/:id
- * @access  Public
- */
-exports.getTrajetByIdPublic = async (req, res) => {
-    try {
-        const trajet = await Trajet.findById(req.params.id).populate('bus');
-        if (!trajet) {
-          return res.status(404).json({ message: 'Trajet non trouvé' });
-        }
-        res.json(trajet);
-    } catch (err) {
-        console.error("Erreur [getTrajetByIdPublic]:", err);
-        res.status(500).json({ message: "Erreur serveur." });
-    }
+exports.getAvailableTrajetsForColis = async (req, res) => {
+  try {
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+
+    const trajetsDisponibles = await Trajet.find({
+      isActive: true,
+      dateDepart: { $gte: today }
+    }).sort({ dateDepart: 1 });
+
+    res.json(trajetsDisponibles);
+
+  } catch (err) {
+    console.error("Erreur [getAvailableTrajetsForColis]:", err);
+    res.status(500).json({ message: "Erreur serveur lors de la récupération des trajets disponibles." });
+  }
 };
-// ==========================================================
-// === NOUVELLE FONCTION POUR ANNULER UN TRAJET
-// ==========================================================
-/**
- * @desc    Annuler un trajet (le rend inactif et met à jour le LiveTrip si besoin)
- * @route   PUT /api/admin/trajets/:id/cancel
- * @access  Admin
- */
+
 exports.cancelTrajet = async (req, res) => {
   try {
     const trajet = await Trajet.findByIdAndUpdate(
@@ -128,8 +198,7 @@ exports.cancelTrajet = async (req, res) => {
     if (!trajet) {
       return res.status(404).json({ message: "Trajet non trouvé" });
     }
-
-    // On met aussi à jour le LiveTrip associé, s'il existe, pour le marquer comme "Annulé"
+    
     await LiveTrip.findOneAndUpdate(
         { trajetId: req.params.id },
         { status: 'Annulé' }
@@ -141,11 +210,7 @@ exports.cancelTrajet = async (req, res) => {
     res.status(500).json({ message: "Erreur serveur lors de l'annulation du trajet." });
   }
 };
-/**
- * @desc    Créer un nouveau trajet
- * @route   POST /api/admin/trajets
- * @access  Admin
- */
+
 exports.createTrajet = async (req, res) => {
   try {
     const newTrajet = new Trajet(req.body);
@@ -156,63 +221,6 @@ exports.createTrajet = async (req, res) => {
   }
 };
 
-/**
- * @desc    Récupérer tous les trajets pour le tableau de bord admin
- * @route   GET /api/admin/trajets
- * @access  Admin
- */
-exports.getAllTrajetsAdmin = async (req, res) => {
-  try {
-    const { status } = req.query;
-    let dateFilter = {};
-
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
-
-    if (status === 'avenir') {
-        dateFilter = { dateDepart: { $gte: today } };
-    } else if (status === 'passes') {
-        dateFilter = { dateDepart: { $lt: today } };
-    }
-    
-    const trajets = await Trajet.find(dateFilter)
-        .populate('bus', 'numero etat')
-        .lean();
-
-    // ==========================================================
-    // === DÉBUT DE LA CORRECTION
-    // ==========================================================
-    const trajetsWithLiveTrip = await Promise.all(
-        trajets.map(async (trajet) => {
-            // On récupère l'objet LiveTrip entier (ou null) pour avoir son ID
-            const liveTrip = await LiveTrip.findOne({ trajetId: trajet._id }).lean();
-            return {
-                ...trajet,
-                liveTrip: liveTrip || null // On attache l'objet liveTrip entier
-            };
-        })
-    );
-    // ==========================================================
-    // === FIN DE LA CORRECTION
-    // ==========================================================
-    
-    trajetsWithLiveTrip.sort((a, b) => {
-      const dateA = new Date(a.dateDepart);
-      const dateB = new Date(b.dateDepart);
-      return status === 'passes' ? dateB - dateA : dateA - dateB;
-    });
-
-    res.json(trajetsWithLiveTrip);
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-};
-
-/**
- * @desc    Mettre à jour un trajet existant
- * @route   PUT /api/admin/trajets/:id
- * @access  Admin
- */
 exports.updateTrajet = async (req, res) => {
   try {
     const updatedTrajet = await Trajet.findByIdAndUpdate(req.params.id, req.body, {
@@ -228,11 +236,6 @@ exports.updateTrajet = async (req, res) => {
   }
 };
 
-/**
- * @desc    Supprimer un trajet
- * @route   DELETE /api/admin/trajets/:id
- * @access  Admin
- */
 exports.deleteTrajet = async (req, res) => {
   try {
     const deletedTrajet = await Trajet.findByIdAndDelete(req.params.id);
