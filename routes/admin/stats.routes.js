@@ -1,15 +1,17 @@
 // backend/routes/admin/stats.routes.js
 const express = require('express');
 const router = express.Router();
-// --- CORRECTION : Importer les deux fonctions ---
-const { getRevenus, getPerformanceInsights } = require('../../controllers/stats.controller');
+// --- CORRECTION : Importer la nouvelle fonction ---
+const { getRevenus, getPerformanceInsights, getOverviewStats } = require('../../controllers/stats.controller');
 const { protect, isAdmin } = require('../../middlewares/auth.middleware');
 
 router.use(protect, isAdmin);
 
-router.get('/revenus', getRevenus);
+// --- CORRECTION : AJOUT DE LA NOUVELLE ROUTE ---
+router.get('/overview', getOverviewStats);
+// ---------------------------------------------
 
-// --- NOUVELLE ROUTE ---
+router.get('/revenus', getRevenus);
 router.get('/performance', getPerformanceInsights);
 
 module.exports = router;

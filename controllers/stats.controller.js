@@ -5,6 +5,33 @@ const Client = require("../models/client.model");
 const Trajet = require("../models/trajet.model");
 const mongoose = require('mongoose');
 
+/**
+ * @desc    Récupérer les statistiques globales pour le tableau de bord admin.
+ * @route   GET /api/admin/stats/overview
+ * @access  Admin
+ */
+exports.getOverviewStats = async (req, res) => {
+    try {
+        // On lance toutes les requêtes de comptage en parallèle pour une efficacité maximale
+        const [busCount, chauffeurCount, colisCount, reservationCount] = await Promise.all([
+            Bus.countDocuments(),
+            Chauffeur.countDocuments(),
+            Colis.countDocuments(),
+            Reservation.countDocuments() // On peut compter toutes les réservations ici
+        ]);
+
+        res.json({
+            busCount,
+            chauffeurCount,
+            colisCount,
+            reservationCount
+        });
+
+    } catch (err) {
+        console.error("Erreur getOverviewStats:", err);
+        res.status(500).json({ message: "Erreur serveur lors de la récupération des statistiques." });
+    }
+};
 // --- FONCTION DE REVENUS AMÉLIORÉE ---
 exports.getRevenus = async (req, res) => {
   try {
