@@ -86,8 +86,44 @@ exports.updateChauffeur = async (req, res) => {
  */
 exports.getChauffeurs = async (req, res) => {
   try {
-    const chauffeurs = await Chauffeur.find().populate("bus");
-    return res.json(chauffeurs);
+    const { page = 1, limit = 7, sortBy = 'name_asc', search = '' } = req.query;
+
+    let filter = {};
+    if (search) {
+      filter = {
+        $or: [
+          { prenom: { $regex: search, $options: 'i' } },
+          { nom: { $regex: search, $options: 'i' } },
+          { telephone: { $regex: search, $options: 'i' } }
+        ]
+      };
+    }
+
+    let sortOptions = {};
+    if (sortBy === 'name_desc') {
+        sortOptions.nom = -1;
+    } else {
+        sortOptions.nom = 1;
+    }
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const [docs, total] = await Promise.all([
+        Chauffeur.find(filter)
+            .populate('bus', 'numero')
+            .sort(sortOptions)
+            .skip(skip)
+            .limit(parseInt(limit)),
+        Chauffeur.countDocuments(filter)
+    ]);
+    
+    res.json({
+        docs,
+        total,
+        page: parseInt(page),
+        pages: Math.ceil(total / parseInt(limit))
+    });
+
   } catch (err) {
     console.error("Erreur getChauffeurs:", err);
     return res.status(500).json({ message: err.message });

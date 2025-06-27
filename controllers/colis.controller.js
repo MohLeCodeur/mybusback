@@ -34,13 +34,67 @@ exports.creerColis = async (req, res) => {
 
 exports.getAllColis = async (req, res) => {
   try {
-    const colisList = await Colis.find({})
-      // --- CORRECTION : On peuple le trajet pour avoir les noms des villes ---
-      .populate('trajet', 'villeDepart villeArrivee')
-      .sort({ date_enregistrement: -1 });
-      
-    return res.json(colisList);
+    const { page = 1, limit = 10, sortBy = 'date_desc', search = '', statut = '' } = req.query;
+
+    let pipeline = [
+      { $lookup: { from: 'trajets', localField: 'trajet', foreignField: '_id', as: 'trajetInfo' } },
+      { $unwind: '$trajetInfo' },
+    ];
+    
+    let matchFilter = {};
+    if (statut) {
+      matchFilter.statut = statut;
+    }
+    if (search) {
+      matchFilter.$or = [
+        { code_suivi: { $regex: search, $options: 'i' } },
+        { expediteur_nom: { $regex: search, $options: 'i' } },
+        { destinataire_nom: { $regex: search, $options: 'i' } },
+        { 'trajetInfo.villeDepart': { $regex: search, $options: 'i' } },
+        { 'trajetInfo.villeArrivee': { $regex: search, $options: 'i' } },
+      ];
+    }
+    if (Object.keys(matchFilter).length > 0) {
+      pipeline.push({ $match: matchFilter });
+    }
+
+    let sortStage = {};
+    switch (sortBy) {
+        case 'date_asc': sortStage = { date_enregistrement: 1 }; break;
+        case 'price_desc': sortStage = { prix: -1 }; break;
+        case 'price_asc': sortStage = { prix: 1 }; break;
+        case 'date_desc':
+        default: sortStage = { date_enregistrement: -1 }; break;
+    }
+    pipeline.push({ $sort: sortStage });
+
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
+    const skip = (pageNum - 1) * limitNum;
+
+    const facetPipeline = [
+        ...pipeline,
+        { $facet: {
+            docs: [
+              { $skip: skip }, { $limit: limitNum },
+              { $project: {
+                  _id: 1, code_suivi: 1, statut: 1, prix: 1, expediteur_nom: 1, destinataire_nom: 1,
+                  'trajet.villeDepart': '$trajetInfo.villeDepart',
+                  'trajet.villeArrivee': '$trajetInfo.villeArrivee',
+              }}
+            ],
+            totalCount: [{ $count: 'total' }]
+        }}
+    ];
+
+    const results = await Colis.aggregate(facetPipeline);
+    const docs = results[0].docs;
+    const total = results[0].totalCount[0] ? results[0].totalCount[0].total : 0;
+    
+    res.json({ docs, total, page: pageNum, pages: Math.ceil(total / limitNum) });
+
   } catch (err) {
+    console.error("Erreur getAllColis:", err);
     return res.status(500).json({ message: err.message });
   }
 };
