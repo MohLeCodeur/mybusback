@@ -4,18 +4,19 @@ const LiveTrip = require('../models/LiveTrip.model');
 const mongoose = require('mongoose');
 
 // ====================================================================
-// --- FONCTION ENTIÈREMENT REVUE ET CORRIGÉE ---
+// --- FONCTION ENTIÈREMENT REVUE ET CORRIGÉE AVEC LOGIQUE DE STATUT ROBUSTE ---
 // ====================================================================
 /**
- * @desc    Récupérer tous les trajets pour le tableau de bord admin, avec filtres, recherche et tri.
+ * @desc    Récupérer tous les trajets pour l'admin, avec filtres, recherche et tri.
  * @route   GET /api/admin/trajets
  * @access  Admin
  */
 exports.getAllTrajetsAdmin = async (req, res) => {
   try {
     const { status = 'avenir', search = '', sortBy = 'date_asc', page = 1, limit = 8 } = req.query;
+    const now = new Date();
 
-    // 1. Appliquer le filtre de recherche textuelle sur la collection Trajet
+    // 1. Appliquer le filtre de recherche textuelle directement dans la requête DB
     let searchFilter = {};
     if (search) {
         searchFilter = {
@@ -27,36 +28,40 @@ exports.getAllTrajetsAdmin = async (req, res) => {
         };
     }
     
-    // 2. Récupérer les trajets qui correspondent à la recherche et leurs LiveTrips
     const trajetsCorrespondants = await Trajet.find(searchFilter).populate('bus', 'numero etat').lean();
     const trajetIds = trajetsCorrespondants.map(t => t._id);
     
     const liveTrips = await LiveTrip.find({ trajetId: { $in: trajetIds } }).lean();
     const liveTripMap = new Map(liveTrips.map(lt => [lt.trajetId.toString(), lt]));
 
-    // 3. Filtrer en mémoire en fonction du statut réel
+    // 2. Filtrer en mémoire en fonction du statut réel et de la date
     let filteredTrajets = [];
     trajetsCorrespondants.forEach(trajet => {
         const liveTrip = liveTripMap.get(trajet._id.toString());
+        const departureDateTime = new Date(`${new Date(trajet.dateDepart).toISOString().split('T')[0]}T${trajet.heureDepart}:00Z`);
         const trajetWithLiveTrip = { ...trajet, liveTrip };
         
         let conditionMet = false;
         switch (status) {
             case 'avenir':
-                // Un trajet est "à venir" s'il n'a pas de suivi ou si son suivi est 'À venir'
-                if (!liveTrip || liveTrip.status === 'À venir') {
+                // "À venir" = L'heure de départ est dans le futur ET le voyage n'est pas encore 'En cours'
+                if (departureDateTime >= now && (!liveTrip || liveTrip.status === 'À venir')) {
                     conditionMet = true;
                 }
                 break;
             case 'encours':
-                // Un trajet est "en cours" uniquement si son suivi l'est
+                // "En cours" = Le statut LiveTrip est explicitement 'En cours'
                 if (liveTrip && liveTrip.status === 'En cours') {
                     conditionMet = true;
                 }
                 break;
             case 'passes':
-                // Un trajet est "passé" s'il est annulé OU si son suivi est 'Terminé' ou 'Annulé'
-                if (!trajet.isActive || (liveTrip && ['Terminé', 'Annulé'].includes(liveTrip.status))) {
+                // "Passé" = Le voyage est terminé, annulé, OU l'heure de départ est passée sans qu'il soit démarré
+                if (
+                    !trajet.isActive ||
+                    (liveTrip && ['Terminé', 'Annulé'].includes(liveTrip.status)) ||
+                    (departureDateTime < now && (!liveTrip || liveTrip.status !== 'En cours'))
+                ) {
                     conditionMet = true;
                 }
                 break;
@@ -71,7 +76,7 @@ exports.getAllTrajetsAdmin = async (req, res) => {
         }
     });
     
-    // 4. Appliquer le tri sur la liste filtrée
+    // 3. Appliquer le tri sur la liste filtrée
     filteredTrajets.sort((a, b) => {
         const dateA = new Date(a.dateDepart);
         const dateB = new Date(b.dateDepart);
@@ -84,9 +89,9 @@ exports.getAllTrajetsAdmin = async (req, res) => {
         }
     });
 
-    // 5. Appliquer la pagination sur le résultat final
+    // 4. Appliquer la pagination sur le résultat final
     const total = filteredTrajets.length;
-    const paginatedTrajets = filteredTrajets.slice((page - 1) * limit, page * limit);
+    const paginatedTrajets = filteredTrajets.slice((parseInt(page) - 1) * parseInt(limit), parseInt(page) * parseInt(limit));
 
     res.json({
         docs: paginatedTrajets,
@@ -104,9 +109,8 @@ exports.getAllTrajetsAdmin = async (req, res) => {
 // --- FIN DE LA CORRECTION ---
 // ====================================================================
 
-
-// Le reste des fonctions (create, update, delete, etc.) reste inchangé.
-// Vous n'avez besoin que de remplacer la fonction getAllTrajetsAdmin ci-dessus.
+// Le reste des fonctions (create, update, delete, etc.) est correct et reste inchangé.
+// ...
 
 /**
  * @desc    Récupérer les détails d'un seul trajet pour l'interface publique
