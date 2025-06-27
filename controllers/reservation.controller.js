@@ -166,26 +166,100 @@ exports.getReservationByIdPublic = async (req, res) => {
 
 exports.getAllReservationsAdmin = async (req, res) => {
   try {
-    const { statut } = req.query; // ex: 'confirmée', 'en_attente'
-    let queryFilter = {};
+    const { statut, search, sortBy, page = 1, limit = 9 } = req.query;
+    
+    // --- Étape 1: Construire le pipeline d'agrégation ---
+    let pipeline = [
+      // Jointure avec la collection 'clients'
+      { $lookup: { from: 'clients', localField: 'client', foreignField: '_id', as: 'clientInfo' } },
+      { $unwind: '$clientInfo' },
+      // Jointure avec la collection 'trajets'
+      { $lookup: { from: 'trajets', localField: 'trajet', foreignField: '_id', as: 'trajetInfo' } },
+      { $unwind: '$trajetInfo' },
+    ];
 
-    if (statut && ['confirmée', 'en_attente', 'annulée'].includes(statut)) {
-        queryFilter.statut = statut;
+    // --- Étape 2: Construire le filtre de correspondance ($match) ---
+    let matchFilter = {};
+    if (statut) {
+      matchFilter.statut = statut;
+    }
+    if (search) {
+      matchFilter.$or = [
+        { 'clientInfo.prenom': { $regex: search, $options: 'i' } },
+        { 'clientInfo.nom': { $regex: search, $options: 'i' } },
+        { 'clientInfo.email': { $regex: search, $options: 'i' } },
+        { 'trajetInfo.villeDepart': { $regex: search, $options: 'i' } },
+        { 'trajetInfo.villeArrivee': { $regex: search, $options: 'i' } },
+      ];
+    }
+    // S'il y a des conditions de filtre, on les ajoute au pipeline
+    if (Object.keys(matchFilter).length > 0) {
+      pipeline.push({ $match: matchFilter });
     }
 
-    const list = await Reservation.find(queryFilter)
-      .populate('client', 'prenom nom email')
-      .populate({
-        path: 'trajet',
-        select: 'villeDepart villeArrivee dateDepart prix', // On ne récupère que les champs utiles
-        populate: { path: 'bus', select: 'numero' }
-      })
-      .sort({ dateReservation: -1 });
+    // --- Étape 3: Ajouter le champ calculé pour le tri par montant ---
+    pipeline.push({
+      $addFields: {
+        montantTotal: { $multiply: ['$trajetInfo.prix', '$placesReservees'] }
+      }
+    });
 
-    res.json(list);
+    // --- Étape 4: Construire l'objet de tri ($sort) ---
+    let sortStage = {};
+    switch (sortBy) {
+        case 'amount_desc': sortStage = { montantTotal: -1 }; break;
+        case 'amount_asc': sortStage = { montantTotal: 1 }; break;
+        case 'date_asc': sortStage = { dateReservation: 1 }; break;
+        case 'date_desc':
+        default: sortStage = { dateReservation: -1 }; break;
+    }
+    pipeline.push({ $sort: sortStage });
+    
+    // --- Étape 5: Utiliser $facet pour la pagination et le comptage total ---
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
+    const skip = (pageNum - 1) * limitNum;
+
+    pipeline.push({
+      $facet: {
+        docs: [
+          { $skip: skip },
+          { $limit: limitNum },
+          // On ajoute une dernière projection pour ne garder que les champs utiles
+          { $project: {
+              _id: 1, statut: 1, placesReservees: 1, dateReservation: 1, montantTotal: 1,
+              'client._id': '$clientInfo._id',
+              'client.prenom': '$clientInfo.prenom',
+              'client.nom': '$clientInfo.nom',
+              'trajet._id': '$trajetInfo._id',
+              'trajet.villeDepart': '$trajetInfo.villeDepart',
+              'trajet.villeArrivee': '$trajetInfo.villeArrivee',
+              'trajet.dateDepart': '$trajetInfo.dateDepart',
+              'trajet.prix': '$trajetInfo.prix',
+          }}
+        ],
+        totalCount: [
+          { $count: 'total' }
+        ]
+      }
+    });
+
+    // --- Étape 6: Exécuter le pipeline ---
+    const results = await Reservation.aggregate(pipeline);
+    
+    const docs = results[0].docs;
+    const total = results[0].totalCount[0] ? results[0].totalCount[0].total : 0;
+    
+    res.json({
+        docs,
+        total,
+        page: pageNum,
+        pages: Math.ceil(total / limitNum)
+    });
+
   } catch (err) {
     console.error("Erreur getAllReservationsAdmin:", err);
-    res.status(500).json({ message: err.message });
+    res.status(500).json({ message: "Erreur serveur lors de la récupération des réservations." });
   }
 };
 
