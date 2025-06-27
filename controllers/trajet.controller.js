@@ -2,6 +2,39 @@
 const Trajet = require('../models/trajet.model');
 const LiveTrip = require('../models/LiveTrip.model'); 
 
+// ====================================================================
+// --- DÉBUT DE LA CORRECTION : NOUVELLE FONCTION AJOUTÉE ---
+// ====================================================================
+
+/**
+ * @desc    Récupérer tous les trajets futurs et actifs pour les formulaires admin (ex: colis).
+ *          Cette route n'est pas paginée.
+ * @route   GET /api/admin/trajets/available-for-colis
+ * @access  Admin
+ */
+exports.getAvailableTrajetsForColis = async (req, res) => {
+  try {
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0); // Début de la journée actuelle en UTC
+
+    const trajetsDisponibles = await Trajet.find({
+      isActive: true, // Doit être un trajet actif
+      dateDepart: { $gte: today } // Doit être aujourd'hui ou dans le futur
+    }).sort({ dateDepart: 1 }); // Trié par date de départ
+
+    res.json(trajetsDisponibles);
+
+  } catch (err) {
+    console.error("Erreur [getAvailableTrajetsForColis]:", err);
+    res.status(500).json({ message: "Erreur serveur lors de la récupération des trajets disponibles." });
+  }
+};
+
+// ====================================================================
+// --- FIN DE LA CORRECTION ---
+// ====================================================================
+
+
 /**
  * @desc    Rechercher des trajets pour l'interface publique (avec filtres et pagination)
  * @route   GET /api/public/trajets/search

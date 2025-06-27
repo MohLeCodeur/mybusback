@@ -1,11 +1,23 @@
 // backend/routes/admin/trajet.routes.js
 const express = require('express');
 const router = express.Router();
-// --- LIGNE MODIFIÉE : On importe cancelTrajet ---
-const { createTrajet, getAllTrajetsAdmin, updateTrajet, deleteTrajet, cancelTrajet } = require('../../controllers/trajet.controller');
+// --- DÉBUT DE LA CORRECTION : Importer la nouvelle fonction ---
+const { 
+  createTrajet, 
+  getAllTrajetsAdmin, 
+  updateTrajet, 
+  deleteTrajet,
+  getAvailableTrajetsForColis // <-- NOUVELLE FONCTION
+} = require('../../controllers/trajet.controller');
+// --- FIN DE LA CORRECTION ---
 const { protect, isAdmin } = require('../../middlewares/auth.middleware');
 
 router.use(protect, isAdmin);
+
+// --- DÉBUT DE LA CORRECTION : Ajouter la nouvelle route ---
+// Cette route est spécifique pour les formulaires admin et n'est pas paginée
+router.get('/available-for-colis', getAvailableTrajetsForColis);
+// --- FIN DE LA CORRECTION ---
 
 router.route('/')
   .post(createTrajet)
@@ -14,9 +26,5 @@ router.route('/')
 router.route('/:id')
   .put(updateTrajet)
   .delete(deleteTrajet);
-  
-// --- NOUVELLE ROUTE ---
-// Permet d'annuler un trajet spécifiquement
-router.put('/:id/cancel', cancelTrajet);
 
 module.exports = router;
