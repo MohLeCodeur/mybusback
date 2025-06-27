@@ -3,9 +3,11 @@ const Trajet = require('../models/trajet.model');
 const LiveTrip = require('../models/LiveTrip.model'); 
 const mongoose = require('mongoose');
 
-// --- FONCTION ENTIÈREMENT REVUE ---
+// ====================================================================
+// --- FONCTION ENTIÈREMENT REVUE ET CORRIGÉE ---
+// ====================================================================
 /**
- * @desc    Récupérer tous les trajets pour le tableau de bord admin, avec filtres et tri.
+ * @desc    Récupérer tous les trajets pour le tableau de bord admin, avec filtres, recherche et tri.
  * @route   GET /api/admin/trajets
  * @access  Admin
  */
@@ -13,54 +15,63 @@ exports.getAllTrajetsAdmin = async (req, res) => {
   try {
     const { status = 'avenir', search = '', sortBy = 'date_asc', page = 1, limit = 8 } = req.query;
 
-    let queryFilter = {};
-
-    // 1. Filtrer par recherche textuelle (villeDepart, villeArrivee, compagnie)
+    // 1. Appliquer le filtre de recherche textuelle sur la collection Trajet
+    let searchFilter = {};
     if (search) {
-        queryFilter.$or = [
-            { villeDepart: { $regex: search, $options: 'i' } },
-            { villeArrivee: { $regex: search, $options: 'i' } },
-            { compagnie: { $regex: search, $options: 'i' } }
-        ];
+        searchFilter = {
+            $or: [
+                { villeDepart: { $regex: search, $options: 'i' } },
+                { villeArrivee: { $regex: search, $options: 'i' } },
+                { compagnie: { $regex: search, $options: 'i' } }
+            ]
+        };
     }
     
-    // 2. Pré-filtrage des trajets basé sur le statut liveTrip
-    const liveTrips = await LiveTrip.find({}).lean();
+    // 2. Récupérer les trajets qui correspondent à la recherche et leurs LiveTrips
+    const trajetsCorrespondants = await Trajet.find(searchFilter).populate('bus', 'numero etat').lean();
+    const trajetIds = trajetsCorrespondants.map(t => t._id);
+    
+    const liveTrips = await LiveTrip.find({ trajetId: { $in: trajetIds } }).lean();
     const liveTripMap = new Map(liveTrips.map(lt => [lt.trajetId.toString(), lt]));
 
-    const allTrajets = await Trajet.find(queryFilter).populate('bus', 'numero etat').lean();
-    
+    // 3. Filtrer en mémoire en fonction du statut réel
     let filteredTrajets = [];
-    
-    // 3. Appliquer la logique de statut
-    allTrajets.forEach(trajet => {
+    trajetsCorrespondants.forEach(trajet => {
         const liveTrip = liveTripMap.get(trajet._id.toString());
         const trajetWithLiveTrip = { ...trajet, liveTrip };
         
+        let conditionMet = false;
         switch (status) {
             case 'avenir':
+                // Un trajet est "à venir" s'il n'a pas de suivi ou si son suivi est 'À venir'
                 if (!liveTrip || liveTrip.status === 'À venir') {
-                    filteredTrajets.push(trajetWithLiveTrip);
+                    conditionMet = true;
                 }
                 break;
             case 'encours':
+                // Un trajet est "en cours" uniquement si son suivi l'est
                 if (liveTrip && liveTrip.status === 'En cours') {
-                    filteredTrajets.push(trajetWithLiveTrip);
+                    conditionMet = true;
                 }
                 break;
             case 'passes':
+                // Un trajet est "passé" s'il est annulé OU si son suivi est 'Terminé' ou 'Annulé'
                 if (!trajet.isActive || (liveTrip && ['Terminé', 'Annulé'].includes(liveTrip.status))) {
-                    filteredTrajets.push(trajetWithLiveTrip);
+                    conditionMet = true;
                 }
                 break;
             case 'tous':
             default:
-                filteredTrajets.push(trajetWithLiveTrip);
+                conditionMet = true;
                 break;
+        }
+
+        if (conditionMet) {
+            filteredTrajets.push(trajetWithLiveTrip);
         }
     });
     
-    // 4. Appliquer le tri
+    // 4. Appliquer le tri sur la liste filtrée
     filteredTrajets.sort((a, b) => {
         const dateA = new Date(a.dateDepart);
         const dateB = new Date(b.dateDepart);
@@ -73,7 +84,7 @@ exports.getAllTrajetsAdmin = async (req, res) => {
         }
     });
 
-    // 5. Appliquer la pagination
+    // 5. Appliquer la pagination sur le résultat final
     const total = filteredTrajets.length;
     const paginatedTrajets = filteredTrajets.slice((page - 1) * limit, page * limit);
 
@@ -81,7 +92,7 @@ exports.getAllTrajetsAdmin = async (req, res) => {
         docs: paginatedTrajets,
         total,
         page: parseInt(page),
-        pages: Math.ceil(total / limit)
+        pages: Math.ceil(total / parseInt(limit))
     });
 
   } catch (err) {
@@ -89,6 +100,9 @@ exports.getAllTrajetsAdmin = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
+// ====================================================================
+// --- FIN DE LA CORRECTION ---
+// ====================================================================
 
 
 // Le reste des fonctions (create, update, delete, etc.) reste inchangé.
