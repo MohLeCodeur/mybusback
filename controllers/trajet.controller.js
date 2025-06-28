@@ -10,55 +10,97 @@ const LiveTrip = require('../models/LiveTrip.model');
 exports.searchTrajets = async (req, res) => {
   try {
     const { villeDepart, villeArrivee, date, sortBy = 'date', limit = 6, page = 1 } = req.query;
-    let queryFilter = { isActive: true };
-    if (villeDepart) queryFilter.villeDepart = { $regex: villeDepart, $options: 'i' };
-    if (villeArrivee) queryFilter.villeArrivee = { $regex: villeArrivee, $options: 'i' };
+    
+    // --- DÉBUT DE LA NOUVELLE LOGIQUE D'AGRÉGATION ---
 
-    // ====================================================================
-    // --- DÉBUT DE LA CORRECTION ---
-    // ====================================================================
+    // Étape 1 : On commence le pipeline d'agrégation
+    let pipeline = [];
+    
+    // Étape 2 : On combine la date et l'heure en un seul champ de type Date
+    // MongoDB peut ensuite comparer ce champ correctement
+    pipeline.push({
+      $addFields: {
+        fullDepartureDate: {
+          $dateFromString: {
+            dateString: {
+              $concat: [
+                { $dateToString: { format: "%Y-%m-%d", date: "$dateDepart" } },
+                "T",
+                "$heureDepart",
+                ":00.000Z" // On suppose que l'heure est en UTC
+              ]
+            }
+          }
+        }
+      }
+    });
+
+    // Étape 3 : On construit le filtre ($match)
+    let matchFilter = { isActive: true };
+
     if (date) {
-      // Si une date spécifique est fournie, on cherche sur toute la journée
+      // Si une date est spécifiée, on filtre sur cette journée
       const startDate = new Date(`${date}T00:00:00.000Z`);
       const endDate = new Date(`${date}T23:59:59.999Z`);
-      queryFilter.dateDepart = { $gte: startDate, $lte: endDate };
+      matchFilter.fullDepartureDate = { $gte: startDate, $lte: endDate };
     } else {
-      // CORRECTION : Si aucune date n'est fournie, on ne montre que les trajets
-      // à partir de minuit aujourd'hui pour inclure ceux de la journée en cours.
-      const today = new Date();
-      today.setUTCHours(0, 0, 0, 0); // On met l'heure à minuit UTC.
-      queryFilter.dateDepart = { $gte: today };
+      // Si aucune date n'est spécifiée, on filtre pour avoir tous les trajets futurs
+      matchFilter.fullDepartureDate = { $gte: new Date() };
     }
-    // ====================================================================
-    // --- FIN DE LA CORRECTION ---
-    // ====================================================================
 
+    // On ajoute les filtres de ville si présents
+    if (villeDepart) matchFilter.villeDepart = { $regex: villeDepart, $options: 'i' };
+    if (villeArrivee) matchFilter.villeArrivee = { $regex: villeArrivee, $options: 'i' };
+
+    pipeline.push({ $match: matchFilter });
+    
+    // Étape 4 : On construit le tri
     let sortOptions = {};
     if (sortBy === 'price_asc') sortOptions.prix = 1;
     else if (sortBy === 'price_desc') sortOptions.prix = -1;
-    else sortOptions.dateDepart = 1; // Le tri par défaut est par date la plus proche
+    else sortOptions.fullDepartureDate = 1; // On trie sur notre nouveau champ
 
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    pipeline.push({ $sort: sortOptions });
+
+    // Étape 5 : On gère la pagination avec $facet
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
+    const skip = (pageNum - 1) * limitNum;
+
+    const facetPipeline = [
+      ...pipeline,
+      {
+        $facet: {
+          docs: [
+            { $skip: skip },
+            { $limit: limitNum },
+            // On peuple le bus associé
+            { $lookup: { from: 'bus', localField: 'bus', foreignField: '_id', as: 'bus' } },
+            { $unwind: { path: '$bus', preserveNullAndEmptyArrays: true } }
+          ],
+          totalCount: [
+            { $count: 'total' }
+          ]
+        }
+      }
+    ];
+
+    // On exécute l'agrégation
+    const results = await Trajet.aggregate(facetPipeline);
+    const docs = results[0].docs;
+    const total = results[0].totalCount[0] ? results[0].totalCount[0].total : 0;
     
-    // On exécute les requêtes en parallèle pour plus d'efficacité
-    const [docs, total, allCities] = await Promise.all([
-      Trajet.find(queryFilter)
-        .populate('bus', 'numero')
-        .sort(sortOptions)
-        .skip(skip)
-        .limit(parseInt(limit))
-        .lean(), // .lean() est plus rapide pour les lectures simples
-      Trajet.countDocuments(queryFilter),
-      Trajet.distinct('villeDepart'),
-    ]);
-    
+    // On récupère les métadonnées (villes) en parallèle
+    const allCities = await Trajet.distinct('villeDepart');
+
     res.json({
       docs,
       total,
-      page: parseInt(page),
-      pages: Math.ceil(total / parseInt(limit)),
+      page: pageNum,
+      pages: Math.ceil(total / limitNum),
       meta: { allCities }
     });
+
   } catch (err) {
     console.error("Erreur [searchTrajets]:", err);
     res.status(500).json({ message: "Erreur serveur lors de la recherche." });
