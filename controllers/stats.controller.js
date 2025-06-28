@@ -149,6 +149,7 @@ exports.getPerformanceInsights = async (req, res) => {
         }
         startDate.setHours(0, 0, 0, 0);
         const dateFilter = { $gte: startDate };
+        
         const topRoutesPromise = Reservation.aggregate([
             { $match: { statut: 'confirmée', dateReservation: dateFilter } },
             { $lookup: { from: 'trajets', localField: 'trajet', foreignField: '_id', as: 'trajetInfo' } },
@@ -165,13 +166,12 @@ exports.getPerformanceInsights = async (req, res) => {
             { $project: { _id: 0, route: { $concat: ['$villeDepart', ' → ', '$villeArrivee'] }, totalRevenue: 1, reservationCount: 1 } }
         ]);
 
-        // <--- DÉBUT DE L'AJOUT : Pipeline pour les colis les plus rentables par destination --->
         const topParcelDestinationsPromise = Colis.aggregate([
             { $match: { date_enregistrement: dateFilter } },
             { $lookup: { from: 'trajets', localField: 'trajet', foreignField: '_id', as: 'trajetInfo' } },
             { $unwind: '$trajetInfo' },
             { $group: {
-                _id: '$trajetInfo.villeArrivee', // On groupe par ville d'arrivée
+                _id: '$trajetInfo.villeArrivee',
                 totalRevenue: { $sum: '$prix' },
                 colisCount: { $sum: 1 }
             }},
@@ -179,18 +179,17 @@ exports.getPerformanceInsights = async (req, res) => {
             { $limit: 5 },
             { $project: {
                 _id: 0,
-                destination: '$_id', // On renomme le champ pour plus de clarté
+                destination: '$_id',
                 totalRevenue: 1,
                 colisCount: 1
             }}
         ]);
-        // <--- FIN DE L'AJOUT --->
 
-        // <--- MODIFICATION : On ajoute notre nouvelle promesse à Promise.all --->
+        // --- Le pipeline pour topCompanies est complètement supprimé ---
+
         const [topRoutes, topParcelDestinations] = await Promise.all([topRoutesPromise, topParcelDestinationsPromise]);
 
         res.json({ topRoutes, topParcelDestinations });
-        // <--- FIN DE LA MODIFICATION --->
 
     } catch (err) {
         console.error("Erreur de calcul des insights de performance:", err);

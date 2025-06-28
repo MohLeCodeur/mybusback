@@ -1,13 +1,10 @@
 // backend/seed.js
-// Ce script nettoie et peuple les collections avec des données de test enrichies.
-
 require('dotenv').config();
 const mongoose = require('mongoose');
 const Trajet = require('./models/trajet.model');
 const Bus = require('./models/bus.model');
 const Reservation = require('./models/reservation.model');
 
-// --- LISTE DE VILLES ENRICHIE ---
 const CITIES_COORDS = {
     'Bamako': { lat: 12.6392, lng: -8.0029 },
     'Kayes': { lat: 14.4469, lng: -11.4443 },
@@ -21,22 +18,15 @@ const CITIES_COORDS = {
     'Kita': { lat: 13.0444, lng: -9.4895 },
     'Bougouni': { lat: 11.4194, lng: -7.4817 },
 };
-
-
-
 const HEURES_DEPART = ['06:00', '07:30', '08:00', '09:30', '14:00', '16:00', '20:00', '21:00'];
 
+// --- Le tableau COMPANIES est supprimé ---
+
 const seedDatabase = async () => {
-    const mongoURI = process.env.MONGODB_URI;
-    if (!mongoURI) {
-        console.error('❌ Erreur: MONGODB_URI n\'est pas défini dans .env');
-        process.exit(1);
-    }
-
+    // ... (la connexion à la DB reste la même) ...
     try {
-        await mongoose.connect(mongoURI);
+        await mongoose.connect(process.env.MONGODB_URI);
         console.log('✅ Connecté à MongoDB');
-
         console.log('Nettoyage des collections...');
         await Trajet.deleteMany({});
         await Bus.deleteMany({});
@@ -49,22 +39,22 @@ const seedDatabase = async () => {
             busData.push({
                 numero: `MYBUS-${200 + i}`,
                 etat: 'en service',
-                capacite: 50 + (i % 4 * 5) // Capacités: 50, 55, 60, 65
+                capacite: 50 + (i % 4 * 5)
             });
         }
         const createdBuses = await Bus.insertMany(busData);
         console.log(`✅ ${createdBuses.length} bus créés.`);
 
-        console.log('Génération de 50 trajets entre aujourd\'hui et fin août...');
+        console.log('Génération de 50 trajets...');
         const trajetsToCreate = [];
         const cityNames = Object.keys(CITIES_COORDS);
         
         const startDate = new Date();
-        const endDate = new Date(startDate.getFullYear(), 7, 31); // 31 Août
+        const endDate = new Date(startDate.getFullYear(), 7, 31);
         const diffTime = Math.abs(endDate - startDate);
         const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-        for (let i = 0; i < 50; i++) { // Générer 50 trajets
+        
+        for (let i = 0; i < 50; i++) {
             let villeDepart = cityNames[Math.floor(Math.random() * cityNames.length)];
             let villeArrivee = cityNames[Math.floor(Math.random() * cityNames.length)];
             
@@ -81,10 +71,10 @@ const seedDatabase = async () => {
                 villeArrivee,
                 coordsDepart: CITIES_COORDS[villeDepart],
                 coordsArrivee: CITIES_COORDS[villeArrivee],
-                compagnie: COMPANIES[Math.floor(Math.random() * COMPANIES.length)],
+                // --- La ligne "compagnie" est supprimée ---
                 dateDepart,
                 heureDepart: HEURES_DEPART[Math.floor(Math.random() * HEURES_DEPART.length)],
-                prix: (Math.floor(Math.random() * 25) + 5) * 1000, // Prix entre 5000 et 30000
+                prix: (Math.floor(Math.random() * 25) + 5) * 1000,
                 placesDisponibles: 50,
                 bus: createdBuses[Math.floor(Math.random() * createdBuses.length)]._id,
                 isActive: true,

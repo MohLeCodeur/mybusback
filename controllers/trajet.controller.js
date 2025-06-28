@@ -9,58 +9,48 @@ const LiveTrip = require('../models/LiveTrip.model');
  */
 exports.searchTrajets = async (req, res) => {
   try {
-    const { villeDepart, villeArrivee, date, compagnie, sortBy = 'date', limit = 6, page = 1 } = req.query;
-
+    // --- Le filtre "compagnie" est retiré de la requête ---
+    const { villeDepart, villeArrivee, date, sortBy = 'date', limit = 6, page = 1 } = req.query;
     let queryFilter = { isActive: true };
     if (villeDepart) queryFilter.villeDepart = { $regex: villeDepart, $options: 'i' };
     if (villeArrivee) queryFilter.villeArrivee = { $regex: villeArrivee, $options: 'i' };
-    if (compagnie) queryFilter.compagnie = { $regex: compagnie, $options: 'i' };
+    
+    // --- La logique de filtrage par compagnie est retirée ---
 
-    // ====================================================================
-    // --- DÉBUT DE LA CORRECTION ---
-    // ====================================================================
     if (date) {
-      // Si une date spécifique est fournie, on cherche sur toute la journée
       const startDate = new Date(`${date}T00:00:00.000Z`);
       const endDate = new Date(`${date}T23:59:59.999Z`);
       queryFilter.dateDepart = { $gte: startDate, $lte: endDate };
     } else {
-      // Si aucune date n'est fournie, on ne montre que les trajets futurs à partir
-      // de la date ET de l'heure actuelles.
       queryFilter.dateDepart = { $gte: new Date() };
     }
-    // ====================================================================
-    // --- FIN DE LA CORRECTION ---
-    // ====================================================================
 
     let sortOptions = {};
     if (sortBy === 'price_asc') sortOptions.prix = 1;
     else if (sortBy === 'price_desc') sortOptions.prix = -1;
-    else sortOptions.dateDepart = 1; // Le tri par défaut est par date la plus proche
+    else sortOptions.dateDepart = 1;
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
     
-    // On exécute les requêtes en parallèle pour plus d'efficacité
-    const [docs, total, allCities, allCompanies] = await Promise.all([
+    // --- "allCompanies" est retiré du Promise.all ---
+    const [docs, total, allCities] = await Promise.all([
       Trajet.find(queryFilter)
         .populate('bus', 'numero')
         .sort(sortOptions)
         .skip(skip)
         .limit(parseInt(limit))
-        .lean(), // .lean() est plus rapide pour les lectures simples
+        .lean(),
       Trajet.countDocuments(queryFilter),
       Trajet.distinct('villeDepart'),
-      Trajet.distinct('compagnie')
     ]);
-    
     res.json({
       docs,
       total,
       page: parseInt(page),
       pages: Math.ceil(total / parseInt(limit)),
-      meta: { allCities, allCompanies }
+      // --- "allCompanies" est retiré de la réponse ---
+      meta: { allCities }
     });
-
   } catch (err) {
     console.error("Erreur [searchTrajets]:", err);
     res.status(500).json({ message: "Erreur serveur lors de la recherche." });
@@ -102,7 +92,7 @@ exports.getAllTrajetsAdmin = async (req, res) => {
             $or: [
                 { villeDepart: { $regex: search, $options: 'i' } },
                 { villeArrivee: { $regex: search, $options: 'i' } },
-                { compagnie: { $regex: search, $options: 'i' } }
+                // --- La recherche par compagnie est retirée ---
             ]
         };
     }
@@ -162,17 +152,14 @@ exports.getAllTrajetsAdmin = async (req, res) => {
             default: return dateA - dateB;
         }
     });
-
     const total = filteredTrajets.length;
     const paginatedTrajets = filteredTrajets.slice((parseInt(page) - 1) * parseInt(limit), parseInt(page) * parseInt(limit));
-
     res.json({
         docs: paginatedTrajets,
         total,
         page: parseInt(page),
         pages: Math.ceil(total / parseInt(limit))
     });
-
   } catch (err) {
     console.error("Erreur getAllTrajetsAdmin:", err);
     res.status(500).json({ message: err.message });
