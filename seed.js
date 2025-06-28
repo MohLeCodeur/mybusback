@@ -15,21 +15,14 @@ const CITIES_COORDS = {
     'Sikasso': { lat: 11.3176, lng: -5.6665 },
     'Ségou': { lat: 13.4317, lng: -6.2658 },
     'Mopti': { lat: 14.4944, lng: -4.1970 },
-    'Tombouctou': { lat: 16.7735, lng: -3.0074 },
     'Gao': { lat: 16.2666, lng: -0.0400 },
     'Kidal': { lat: 18.4411, lng: 1.4078 },
     'Koutiala': { lat: 12.3917, lng: -5.4642 },
     'Kita': { lat: 13.0444, lng: -9.4895 },
-    'Nioro du Sahel': { lat: 15.2291, lng: -9.5855 },
     'Bougouni': { lat: 11.4194, lng: -7.4817 },
 };
 
-// --- LISTE DE COMPAGNIES ENRICHIE ---
-const COMPANIES = [
-    'Diarra Transport', 'Bani Transport', 'Sonef Mali', 'Gana Transport',
-    'Sogatra Voyages', 'Folona Express', 'Binke Transport', 'Africa Tours Trans',
-    'Bittar Trans', 'Nour Transport Voyageurs'
-];
+
 
 const HEURES_DEPART = ['06:00', '07:30', '08:00', '09:30', '14:00', '16:00', '20:00', '21:00'];
 
