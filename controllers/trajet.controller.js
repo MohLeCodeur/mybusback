@@ -9,46 +9,54 @@ const LiveTrip = require('../models/LiveTrip.model');
  */
 exports.searchTrajets = async (req, res) => {
   try {
-    // --- Le filtre "compagnie" est retiré de la requête ---
     const { villeDepart, villeArrivee, date, sortBy = 'date', limit = 6, page = 1 } = req.query;
     let queryFilter = { isActive: true };
     if (villeDepart) queryFilter.villeDepart = { $regex: villeDepart, $options: 'i' };
     if (villeArrivee) queryFilter.villeArrivee = { $regex: villeArrivee, $options: 'i' };
-    
-    // --- La logique de filtrage par compagnie est retirée ---
 
+    // ====================================================================
+    // --- DÉBUT DE LA CORRECTION ---
+    // ====================================================================
     if (date) {
+      // Si une date spécifique est fournie, on cherche sur toute la journée
       const startDate = new Date(`${date}T00:00:00.000Z`);
       const endDate = new Date(`${date}T23:59:59.999Z`);
       queryFilter.dateDepart = { $gte: startDate, $lte: endDate };
     } else {
-      queryFilter.dateDepart = { $gte: new Date() };
+      // CORRECTION : Si aucune date n'est fournie, on ne montre que les trajets
+      // à partir de minuit aujourd'hui pour inclure ceux de la journée en cours.
+      const today = new Date();
+      today.setUTCHours(0, 0, 0, 0); // On met l'heure à minuit UTC.
+      queryFilter.dateDepart = { $gte: today };
     }
+    // ====================================================================
+    // --- FIN DE LA CORRECTION ---
+    // ====================================================================
 
     let sortOptions = {};
     if (sortBy === 'price_asc') sortOptions.prix = 1;
     else if (sortBy === 'price_desc') sortOptions.prix = -1;
-    else sortOptions.dateDepart = 1;
+    else sortOptions.dateDepart = 1; // Le tri par défaut est par date la plus proche
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
     
-    // --- "allCompanies" est retiré du Promise.all ---
+    // On exécute les requêtes en parallèle pour plus d'efficacité
     const [docs, total, allCities] = await Promise.all([
       Trajet.find(queryFilter)
         .populate('bus', 'numero')
         .sort(sortOptions)
         .skip(skip)
         .limit(parseInt(limit))
-        .lean(),
+        .lean(), // .lean() est plus rapide pour les lectures simples
       Trajet.countDocuments(queryFilter),
       Trajet.distinct('villeDepart'),
     ]);
+    
     res.json({
       docs,
       total,
       page: parseInt(page),
       pages: Math.ceil(total / parseInt(limit)),
-      // --- "allCompanies" est retiré de la réponse ---
       meta: { allCities }
     });
   } catch (err) {
