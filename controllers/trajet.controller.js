@@ -136,79 +136,138 @@ exports.getAllTrajetsAdmin = async (req, res) => {
     const { status = 'avenir', search = '', sortBy = 'date_asc', page = 1, limit = 8 } = req.query;
     const now = new Date();
 
-    let searchFilter = {};
+    let pipeline = [
+      // 1. Jointure avec la collection 'bus'
+      { $lookup: { from: 'bus', localField: 'bus', foreignField: '_id', as: 'busInfo' } },
+      { $unwind: { path: '$busInfo', preserveNullAndEmptyArrays: true } },
+
+      // 2. Jointure avec 'chauffeurs' pour trouver le chauffeur du bus
+      {
+        $lookup: {
+          from: 'chauffeurs',
+          localField: 'busInfo._id',
+          foreignField: 'bus',
+          as: 'chauffeurInfo'
+        }
+      },
+      { $unwind: { path: '$chauffeurInfo', preserveNullAndEmptyArrays: true } },
+      
+      // 3. Jointure avec 'reservations' pour calculer les places
+      { $lookup: { from: 'reservations', localField: '_id', foreignField: 'trajet', as: 'reservations' } },
+
+      // 4. Calculer le nombre de places réservées
+      {
+        $addFields: {
+          placesReservees: {
+            $sum: {
+              $map: {
+                input: {
+                  $filter: {
+                    input: "$reservations",
+                    as: "res",
+                    cond: { $eq: ["$$res.statut", "confirmée"] }
+                  }
+                },
+                as: "reservation",
+                in: "$$reservation.placesReservees"
+              }
+            }
+          }
+        }
+      },
+
+      // 5. Jointure avec 'livetrips' pour le statut du voyage
+      { $lookup: { from: 'livetrips', localField: '_id', foreignField: 'trajetId', as: 'liveTrip' }},
+      { $unwind: { path: '$liveTrip', preserveNullAndEmptyArrays: true } },
+    ];
+    
+    // 6. Filtrer par recherche textuelle si nécessaire
     if (search) {
-        searchFilter = {
-            $or: [
-                { villeDepart: { $regex: search, $options: 'i' } },
-                { villeArrivee: { $regex: search, $options: 'i' } },
-                // --- La recherche par compagnie est retirée ---
-            ]
-        };
+      pipeline.push({
+        $match: {
+          $or: [
+            { villeDepart: { $regex: search, $options: 'i' } },
+            { villeArrivee: { $regex: search, $options: 'i' } },
+          ]
+        }
+      });
+    }
+
+    // 7. Filtrer par statut (avenir, en cours, etc.)
+    let statusFilter = {};
+    switch (status) {
+      case 'avenir':
+        statusFilter = { fullDepartureDate: { $gte: now }, 'liveTrip.status': { $ne: 'En cours' } };
+        break;
+      case 'encours':
+        statusFilter = { 'liveTrip.status': 'En cours' };
+        break;
+      case 'passes':
+        statusFilter = { $or: [{ isActive: false }, { 'liveTrip.status': { $in: ['Terminé', 'Annulé'] } }] };
+        break;
+      case 'tous':
+      default:
+        break;
     }
     
-    const trajetsCorrespondants = await Trajet.find(searchFilter).populate('bus', 'numero etat').lean();
-    const trajetIds = trajetsCorrespondants.map(t => t._id);
+    if (Object.keys(statusFilter).length > 0) {
+      // On combine la date et l'heure pour le filtre 'avenir'
+      if(statusFilter.fullDepartureDate){
+        pipeline.unshift({
+          $addFields: {
+            fullDepartureDate: {
+              $dateFromString: {
+                dateString: { $concat: [{ $dateToString: { format: "%Y-%m-%d", date: "$dateDepart" } }, "T", "$heureDepart", ":00.000Z" ] }
+              }
+            }
+          }
+        });
+      }
+      pipeline.push({ $match: statusFilter });
+    }
     
-    const liveTrips = await LiveTrip.find({ trajetId: { $in: trajetIds } }).lean();
-    const liveTripMap = new Map(liveTrips.map(lt => [lt.trajetId.toString(), lt]));
+    // 8. Trier les résultats
+    let sortStage = {};
+    switch (sortBy) {
+        case 'price_asc': sortStage = { prix: 1 }; break;
+        case 'price_desc': sortStage = { prix: -1 }; break;
+        case 'date_desc': sortStage = { dateDepart: -1 }; break;
+        case 'date_asc': default: sortStage = { dateDepart: 1 }; break;
+    }
+    pipeline.push({ $sort: sortStage });
 
-    let filteredTrajets = [];
-    trajetsCorrespondants.forEach(trajet => {
-        const liveTrip = liveTripMap.get(trajet._id.toString());
-        const departureDateTime = new Date(`${new Date(trajet.dateDepart).toISOString().split('T')[0]}T${trajet.heureDepart}:00Z`);
-        const trajetWithLiveTrip = { ...trajet, liveTrip };
-        
-        let conditionMet = false;
-        switch (status) {
-            case 'avenir':
-                if (departureDateTime >= now && (!liveTrip || liveTrip.status === 'À venir')) {
-                    conditionMet = true;
-                }
-                break;
-            case 'encours':
-                if (liveTrip && liveTrip.status === 'En cours') {
-                    conditionMet = true;
-                }
-                break;
-            case 'passes':
-                if (
-                    !trajet.isActive ||
-                    (liveTrip && ['Terminé', 'Annulé'].includes(liveTrip.status)) ||
-                    (departureDateTime < now && (!liveTrip || liveTrip.status !== 'En cours'))
-                ) {
-                    conditionMet = true;
-                }
-                break;
-            case 'tous':
-            default:
-                conditionMet = true;
-                break;
-        }
+    // 9. Pagination
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
+    const skip = (pageNum - 1) * limitNum;
 
-        if (conditionMet) {
-            filteredTrajets.push(trajetWithLiveTrip);
-        }
+    pipeline.push({
+      $facet: {
+        docs: [
+          { $skip: skip }, { $limit: limitNum },
+          { $project: {
+              _id: 1, villeDepart: 1, villeArrivee: 1, dateDepart: 1, heureDepart: 1, prix: 1, isActive: 1, liveTrip: 1,
+              'bus.numero': '$busInfo.numero',
+              'bus.capacite': '$busInfo.capacite',
+              'chauffeur.prenom': '$chauffeurInfo.prenom',
+              'chauffeur.nom': '$chauffeurInfo.nom',
+              placesReservees: 1,
+            }
+          }
+        ],
+        totalCount: [{ $count: 'total' }]
+      }
     });
+
+    const results = await Trajet.aggregate(pipeline);
+    const docs = results[0].docs;
+    const total = results[0].totalCount[0] ? results[0].totalCount[0].total : 0;
     
-    filteredTrajets.sort((a, b) => {
-        const dateA = new Date(a.dateDepart);
-        const dateB = new Date(b.dateDepart);
-        switch (sortBy) {
-            case 'price_asc': return a.prix - b.prix;
-            case 'price_desc': return b.prix - a.prix;
-            case 'date_desc': return dateB - dateA;
-            case 'date_asc':
-            default: return dateA - dateB;
-        }
-    });
-    const total = filteredTrajets.length;
-    const paginatedTrajets = filteredTrajets.slice((parseInt(page) - 1) * parseInt(limit), parseInt(page) * parseInt(limit));
     res.json({
-        docs: paginatedTrajets,
+        docs,
         total,
-        page: parseInt(page),
-        pages: Math.ceil(total / parseInt(limit))
+        page: pageNum,
+        pages: Math.ceil(total / limitNum)
     });
   } catch (err) {
     console.error("Erreur getAllTrajetsAdmin:", err);
